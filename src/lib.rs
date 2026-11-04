@@ -3,7 +3,15 @@
 
 pub mod dxt;
 pub mod pkg;
+pub mod project;
+pub mod render;
+pub mod scene;
 pub mod tex;
+mod value;
+
+pub use project::{Blending, Layer, Project};
+pub use render::Renderer;
+pub use scene::Scene;
 
 use std::fmt;
 

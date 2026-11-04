@@ -42,6 +42,14 @@ A scene that uses something not done yet goes on falling back to `linux-wallpape
 
 ## Now
 
-Stage 1. The readers follow the formats as publicly described and are tested on files built
-in the tests. They haven't met a real `scene.pkg` or `.tex` yet: that needs an x86_64 machine
-with Wallpaper Engine installed through Steam, and is the first thing to do there.
+Stages 1 and 2 are written, with a viewer (`examples/view.rs`) that can also save one frame
+off screen, the start of the corpus comparison. Everything is tested on files built in the
+tests and a synthetic scene drawn on macOS's OpenGL. Not one real `scene.pkg`, `.tex` or
+`scene.json` has been read yet, so these are still guesses until then:
+- y going up from the bottom in scene coordinates, and angles in radians;
+- `normal` blending meaning opaque;
+- how far the parallax moves, which is tuned by eye later;
+- the animation frames of `TEXS` textures, not read yet.
+
+That needs a machine with Wallpaper Engine installed through Steam, and is the first thing to
+do there.
