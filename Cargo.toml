@@ -1,0 +1,11 @@
+[package]
+name = "apolline-scene"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A renderer for Wallpaper Engine scenes, in Rust on GLES, written clean-room"
+repository = "https://github.com/Pisosenie/apolline-scene"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tga"] }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-decode"] }
