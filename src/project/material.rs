@@ -199,7 +199,7 @@ impl Project {
                 })
                 .transpose()
         })?;
-        template.fill_defaults(&mut names)?;
+        template.fill_defaults(&mut names, &combos)?;
         let mask = bindings(&names)?;
         let fragment = template.prepare(&combos, &constants, Some(mask))?;
         fragment.validate_inputs(mask)?;

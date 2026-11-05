@@ -101,8 +101,22 @@ impl Template {
         })
     }
 
-    pub(crate) fn fill_defaults(&self, names: &mut Vec<Option<String>>) -> Result<(), Error> {
-        samplers::fill_defaults(&self.output, names)
+    /// Fills texture slots the material leaves empty from the shader's own defaults, read
+    /// from the source as the material's combos select it, so a default in a branch that
+    /// isn't taken neither loads nor refuses anything.
+    pub(crate) fn fill_defaults(
+        &self,
+        names: &mut Vec<Option<String>>,
+        combos: &Map<String, Value>,
+    ) -> Result<(), Error> {
+        let mut values = self.combos.clone();
+        for (name, value) in combos {
+            if values.contains_key(name) {
+                values.insert(name.clone(), integer(value)?);
+            }
+        }
+        let selected = conditional::select(&self.output, &values)?;
+        samplers::fill_defaults(&selected, names)
     }
 
     pub(crate) fn prepare(

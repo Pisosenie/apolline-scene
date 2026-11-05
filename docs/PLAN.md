@@ -64,8 +64,8 @@ Guesses to check on real files first: y going up in scene coordinates and angles
 which aren't read.
 
 Known gaps in the material path, from review:
-- Sampler defaults are looked up before `#if` branches are chosen, so an inactive branch's
-  default can still refuse a material.
+- Sampler defaults follow the material's combos, but not combos that only turn on because a
+  texture is bound.
 - GLSL ES 3.00 is stricter than desktop GL 3.3 about implicit int-to-float conversion, and
   nothing has run on GLES yet; `mul`, `lerp` and `fmod` have no aliases, and helpers with `out`
   parameters are refused.

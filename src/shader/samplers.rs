@@ -215,12 +215,32 @@ mod tests {
             })
         }).unwrap();
         let mut names = Vec::new();
-        template.fill_defaults(&mut names).unwrap();
+        template.fill_defaults(&mut names, &Map::new()).unwrap();
         let fragment = template.prepare(&Map::new(), &Map::new(), Some(1)).unwrap();
         assert_eq!(names, [Some("base".into())]);
         assert_eq!(reads, 2);
         assert!(fragment.source.contains("#define TEXTURE 1"));
         assert!(fragment.validate_inputs(1).is_ok());
+    }
+
+    #[test]
+    fn defaults_in_branches_the_combos_leave_out_are_not_read() {
+        let template = crate::shader::Template::load("entry.frag", |name| {
+            Ok(match name {
+                "shaders/entry.frag" => Some("// [COMBO] {\"combo\":\"MASK\",\"default\":0}\n#if MASK\nuniform sampler2D g_Texture1; // {\"default\":\"_rt_FullFrameBuffer\"}\n#endif\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, vec2(0.5)); }".into()),
+                _ => None,
+            })
+        })
+        .unwrap();
+        let mut names = vec![Some("base".into())];
+        template.fill_defaults(&mut names, &Map::new()).unwrap();
+        assert_eq!(names, [Some("base".into())]);
+        let mask = json!({"MASK": 1}).as_object().unwrap().clone();
+        template.fill_defaults(&mut names, &mask).unwrap();
+        assert_eq!(
+            names,
+            [Some("base".into()), Some("_rt_FullFrameBuffer".into())]
+        );
     }
 
     #[test]
