@@ -15,19 +15,23 @@ pub struct EffectPass {
     pub inputs: Vec<TextureInput>,
 }
 
-const INSTANCE: &[&str] = &["file", "id", "name", "passes", "visible"];
+const INSTANCE: &[&str] = &["file", "id", "name", "passes", "username", "visible"];
 const DEFINITION: &[&str] = &[
     "dependencies",
     "description",
+    "editable",
+    "gizmos",
     "group",
     "name",
     "passes",
     "preview",
+    "replacementkey",
     "version",
 ];
 const STEP: &[&str] = &["material"];
 const OVERRIDE: &[&str] = &["combos", "constantshadervalues", "id", "textures"];
 const PASS: &[&str] = &[
+    "alphawriting",
     "blending",
     "combos",
     "constantshadervalues",

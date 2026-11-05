@@ -52,6 +52,10 @@ pub struct Image {
     pub size: Option<(f32, f32)>,
     pub color: [f32; 3],
     pub alpha: f32,
+    /// Multiplies its colour, above 1 to brighten it.
+    pub brightness: f32,
+    /// Where `origin` is on the layer, from its centre in shares of its size, y up.
+    pub anchor: [f32; 2],
     pub visible: bool,
     /// How far it moves with the pointer, relative to the scene's parallax amount.
     pub depth: [f32; 2],
@@ -70,6 +74,8 @@ pub struct Particles {
     pub angles: [f32; 3],
     pub visible: bool,
     pub depth: [f32; 2],
+    /// What this instance changes in the system: counts, rates, sizes and colour.
+    pub overrides: serde_json::Map<String, Value>,
 }
 
 const DEFAULT_SIZE: (f32, f32) = (1920.0, 1080.0);
@@ -137,8 +143,10 @@ impl Scene {
                 Object::Image(image) if image.angles[0] != 0.0 || image.angles[1] != 0.0 => {
                     note(Missing::Rotation3d)
                 }
-                Object::Particles(particles) if particles.angles != [0.0; 3] => {
-                    note(Missing::Setting("turned particle systems"))
+                Object::Particles(particles)
+                    if particles.angles[0] != 0.0 || particles.angles[1] != 0.0 =>
+                {
+                    note(Missing::Setting("particle systems tilted out of the scene"))
                 }
                 Object::Light => note(Missing::Lights),
                 Object::Other => note(Missing::UnknownObject),
@@ -165,6 +173,8 @@ fn object(value: &Value) -> Object {
             size: (size[0] > 0.0 && size[1] > 0.0).then_some((size[0], size[1])),
             color: vector(field("color"), [1.0; 3]),
             alpha: number(field("alpha")).unwrap_or(1.0),
+            brightness: number(field("brightness")).unwrap_or(1.0),
+            anchor: anchor(text(field("alignment")).unwrap_or("center")),
             visible: flag(field("visible")).unwrap_or(true),
             depth: vector(field("parallaxDepth"), [1.0; 2]),
             effects: field("effects")
@@ -186,6 +196,10 @@ fn object(value: &Value) -> Object {
             angles: vector(field("angles"), [0.0; 3]),
             visible: flag(field("visible")).unwrap_or(true),
             depth: vector(field("parallaxDepth"), [1.0; 2]),
+            overrides: field("instanceoverride")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default(),
         });
     }
     if field("sound").is_some() {
@@ -195,6 +209,25 @@ fn object(value: &Value) -> Object {
         return Object::Light;
     }
     Object::Other
+}
+
+/// `topleft` and the rest as the point on the layer they name.
+fn anchor(alignment: &str) -> [f32; 2] {
+    let x = if alignment.contains("left") {
+        -0.5
+    } else if alignment.contains("right") {
+        0.5
+    } else {
+        0.0
+    };
+    let y = if alignment.contains("top") {
+        0.5
+    } else if alignment.contains("bottom") {
+        -0.5
+    } else {
+        0.0
+    };
+    [x, y]
 }
 
 #[cfg(test)]

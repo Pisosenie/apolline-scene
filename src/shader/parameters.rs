@@ -247,7 +247,9 @@ pub(super) fn bind(
             ));
             continue;
         }
-        if name.starts_with("g_") {
+        // Stock shaders name their own values g_ too; the annotation ties those to the
+        // material, and anything else with the prefix comes from the engine.
+        if name.starts_with("g_") && annotation.get("material").is_none() {
             return Err(fail(format!("dynamic or unsupported uniform {name}")));
         }
         let material = annotation

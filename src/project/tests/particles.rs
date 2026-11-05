@@ -64,3 +64,33 @@ fn particle_materials_beyond_the_plain_sprite_are_refused() {
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
+
+#[test]
+fn an_instance_scales_its_system_and_unknown_overrides_are_refused() {
+    let folder = scene(
+        "particle-overrides",
+        r#"{"passes":[{"textures":["particle/flake"]}]}"#,
+    );
+    let scene = std::fs::read_to_string(folder.join("scene.json")).unwrap().replace(
+        r#""origin":"5 10 0""#,
+        r#""origin":"5 10 0","angles":"0 0 0.5","instanceoverride":{"id":3,"count":0.5,"rate":2,"colorn":"1 0 0"}"#,
+    );
+    std::fs::write(folder.join("scene.json"), &scene).unwrap();
+    let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
+    let system = prepared.layers[1].particles.as_ref().unwrap();
+    assert_eq!((system.max, system.emitters[0].rate), (10, 20.0));
+    assert_eq!(system.spawn.color.high, [1.0, 0.0, 0.0]);
+    std::fs::write(
+        folder.join("scene.json"),
+        scene.replace(r#""rate":2"#, r#""wobble":2"#),
+    )
+    .unwrap();
+    let refused = Project::open(&folder, None)
+        .unwrap()
+        .prepare()
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refused.contains("override wobble"), "{refused}");
+    std::fs::remove_dir_all(folder).unwrap();
+}

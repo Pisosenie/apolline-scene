@@ -178,6 +178,15 @@ impl Template {
         let selected = stage(&expansion.output, &expansion.combos, &controlled)?;
         let mut bound = parameters::bind(&selected, constants, missing, Stage::Fragment)?;
         let mut files = expansion.files;
+        let fragment_tokens = parameters::tokens(&selected)?;
+        // A varying the fragment declares but never reads needn't be written.
+        let read = |name: &str| {
+            fragment_tokens
+                .iter()
+                .filter(|token| token.text == name)
+                .count()
+                > 1
+        };
         let vertex = match vertex {
             Some(vertex) => {
                 // Both stages see the same combos: the fragment's, as the material and its
@@ -190,7 +199,7 @@ impl Template {
                     }
                 }
                 let selected = stage(&vertex.output, &values, &controlled)?;
-                let stage = parameters::bind(&selected, constants, missing, Stage::Vertex)?;
+                let mut stage = parameters::bind(&selected, constants, missing, Stage::Vertex)?;
                 let tokens = parameters::tokens(&selected)?;
                 let named = |name: &str| tokens.iter().any(|token| token.text == name);
                 if named("a_Position") && !named("g_ModelViewProjectionMatrix") {
@@ -199,17 +208,24 @@ impl Template {
                     ));
                 }
                 for varying in &bound.varyings {
-                    if !stage.varyings.contains(varying) {
+                    let written = stage.varyings.iter().find(|(name, _)| *name == varying.0);
+                    if written.is_some_and(|written| written.1 != varying.1)
+                        || (written.is_none() && read(&varying.0))
+                    {
                         return Err(fail(format!(
                             "varying {} isn't written by the vertex shader",
                             varying.0
                         )));
                     }
                 }
-                for (name, value) in stage.constants {
+                // Each stage of a stock shader has values of its own, even under one name;
+                // where they differ, the vertex stage's gets a name of its own.
+                for (name, value) in std::mem::take(&mut stage.constants) {
                     match bound.constants.iter().find(|(known, _)| *known == name) {
                         Some((_, known)) if *known != value => {
-                            return Err(fail(format!("uniform {name} differs between stages")));
+                            let own = format!("apolline_vertex_{name}");
+                            stage.body = rename(&stage.body, &name, &own)?;
+                            bound.constants.push((own, value));
                         }
                         Some(_) => {}
                         None => bound.constants.push((name, value)),
@@ -249,6 +265,22 @@ impl Template {
             files,
         })
     }
+}
+
+/// Every use of an identifier, under another name.
+fn rename(source: &str, from: &str, to: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(source.len() + to.len() * 4);
+    let mut at = 0;
+    for token in parameters::tokens(source)?
+        .iter()
+        .filter(|token| token.text == from)
+    {
+        out.push_str(&source[at..token.start]);
+        out.push_str(to);
+        at = token.end;
+    }
+    out.push_str(&source[at..]);
+    Ok(out)
 }
 
 /// Picks the source a stage's combos select, after making sure it doesn't redefine any of
@@ -824,6 +856,43 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("unknown material constant")
+        );
+    }
+
+    #[test]
+    fn stages_keep_their_own_values_and_unread_varyings_are_let_be() {
+        let vertex = "uniform float g_Speed; // {\"material\":\"speed\",\"default\":1}\nvarying vec2 v_Other;\nvoid main() { v_Other = vec2(g_Speed); }";
+        let fragment = "uniform float g_Speed; // {\"material\":\"speeduv\",\"default\":5}\nvarying vec2 v_Other;\nvarying vec2 v_Scroll;\nvoid main() { gl_FragColor = vec4(v_Other, g_Speed, 1.0); }";
+        let prepared = staged(vertex, fragment, json!({}), json!({})).unwrap();
+        let names: Vec<&str> = prepared
+            .constants
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(names, ["g_Speed", "apolline_vertex_g_Speed"]);
+        assert!(
+            prepared
+                .vertex
+                .unwrap()
+                .contains("vec2(apolline_vertex_g_Speed)")
+        );
+        let reading = fragment.replace("v_Other, g_Speed", "v_Scroll, g_Speed");
+        assert!(staged(vertex, &reading, json!({}), json!({})).is_err());
+    }
+
+    #[test]
+    fn stock_values_may_carry_the_engine_prefix_when_tied_to_the_material() {
+        let source = "uniform float g_Speed; // {\"material\":\"speed\",\"default\":2}\nvoid main() { gl_FragColor = vec4(g_Speed); }";
+        let fragment = prepare(source, json!({}), json!({"speed": 3})).unwrap();
+        assert_eq!(fragment.constants[0].0, "g_Speed");
+        assert_eq!(fragment.constants[0].1.floats()[0], 3.0);
+        assert!(
+            prepare(
+                "uniform float g_Speed;\nvoid main() {}",
+                json!({}),
+                json!({})
+            )
+            .is_err()
         );
     }
 

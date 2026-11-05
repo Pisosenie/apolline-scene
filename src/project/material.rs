@@ -14,6 +14,8 @@ pub(super) struct Material {
     pub names: Vec<Option<String>>,
     pub fragment: Option<Arc<Fragment>>,
     pub blending: Blending,
+    /// What a plain image material multiplies the layer's brightness and alpha by.
+    pub shade: [f32; 2],
 }
 
 impl Project {
@@ -117,6 +119,7 @@ impl Project {
                 !matches!(
                     key.as_str(),
                     "shader"
+                        | "alphawriting"
                         | "textures"
                         | "combos"
                         | "constantshadervalues"
@@ -148,12 +151,11 @@ impl Project {
         let mut names = names(pass.get("textures"))?;
         // Wallpaper Engine's plain image shaders, in their versions, draw what the built-in
         // layer shader draws when nothing varies them.
-        if matches!(shader, "genericimage" | "genericimage2") {
-            if !combos.is_empty() || !constants.is_empty() {
-                return Err(Error::Format(
-                    "genericimage variants need another renderer".into(),
-                ));
-            }
+        if matches!(
+            shader,
+            "genericimage" | "genericimage2" | "genericimage3" | "genericimage4"
+        ) {
+            let shade = plain(&combos, &constants)?;
             if names.len() != 1 {
                 return Err(Error::Format(
                     "genericimage needs exactly one texture slot".into(),
@@ -164,6 +166,7 @@ impl Project {
                 names,
                 fragment: None,
                 blending,
+                shade,
             });
         }
         let fragment = self.custom(shader, &combos, &constants, &mut names, false, resources)?;
@@ -171,6 +174,7 @@ impl Project {
             names,
             fragment: Some(fragment),
             blending,
+            shade: [1.0; 2],
         })
     }
 
@@ -245,6 +249,45 @@ impl Project {
         resources.source_bytes += bytes;
         Ok(Arc::new(fragment))
     }
+}
+
+/// Wallpaper Engine's plain image shaders, in all their versions, draw what the built-in layer
+/// shader draws while lighting, reflection, fog and sprite sheets are off. Their `Brightness`
+/// and `Alpha` values come back as multipliers for the layer's own.
+fn plain(
+    combos: &serde_json::Map<String, Value>,
+    constants: &serde_json::Map<String, Value>,
+) -> Result<[f32; 2], Error> {
+    for (name, value) in combos {
+        let value = crate::value::number(Some(value));
+        let quiet = match name.as_str() {
+            "VERSION" | "version" => true,
+            "LIGHTING" | "REFLECTION" | "FOG" => value == Some(0.0),
+            _ => false,
+        };
+        if !quiet {
+            let name: String = name.chars().take(32).collect();
+            return Err(Error::Format(format!(
+                "genericimage with {name} needs another renderer"
+            )));
+        }
+    }
+    let mut shade = [1.0; 2];
+    for (name, value) in constants {
+        let slot = match name.as_str() {
+            "Brightness" => 0,
+            "Alpha" => 1,
+            _ => {
+                return Err(Error::Format(
+                    "genericimage values other than brightness and alpha".into(),
+                ));
+            }
+        };
+        shade[slot] = crate::value::number(Some(value))
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| Error::Format("genericimage values must be numbers".into()))?;
+    }
+    Ok(shade)
 }
 
 pub(super) fn object(

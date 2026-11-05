@@ -504,7 +504,8 @@ fn layer_class(message: &str) -> String {
         .filter(|word: &String| !word.is_empty())
         .take(9)
         .collect();
-    vocabulary(&words.join("_"))
+    let joined: String = words.join("_").chars().take(64).collect();
+    vocabulary(&joined)
 }
 
 /// An error's first words, without paths or names. Layer errors come as `name: reason; …`,

@@ -110,9 +110,16 @@ impl<'a> Builder<'a> {
                 layer.texture.image_height as f32,
             );
             let (w, h) = image.size.unwrap_or(natural);
+            let size = (w * image.scale[0], h * image.scale[1]);
+            // The origin is the anchor's place; the layer's centre is that far back from it.
+            let (sin, cos) = image.angles[2].sin_cos();
+            let [ax, ay] = [image.anchor[0] * size.0, image.anchor[1] * size.1];
             (
-                [image.origin[0], image.origin[1]],
-                (w * image.scale[0], h * image.scale[1]),
+                [
+                    image.origin[0] - (cos * ax - sin * ay),
+                    image.origin[1] - (sin * ax + cos * ay),
+                ],
+                size,
             )
         };
         Ok(Drawn {
@@ -122,7 +129,12 @@ impl<'a> Builder<'a> {
             origin,
             size,
             angle: image.angles[2],
-            tint: [image.color[0], image.color[1], image.color[2], image.alpha],
+            tint: [
+                image.color[0] * image.brightness,
+                image.color[1] * image.brightness,
+                image.color[2] * image.brightness,
+                image.alpha,
+            ],
             blending: layer.blending,
             depth: image.depth,
         })
@@ -163,7 +175,7 @@ impl<'a> Builder<'a> {
             swarm: Some(swarm),
             origin: [image.origin[0], image.origin[1]],
             size: (image.scale[0], image.scale[1]),
-            angle: 0.0,
+            angle: image.angles[2],
             tint: [1.0; 4],
             blending: layer.blending,
             depth: image.depth,

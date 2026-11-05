@@ -35,30 +35,53 @@ pub struct Emitter {
     pub max: [f32; 3],
     /// How far each axis is used, 0 flattening it.
     pub directions: [f32; 3],
+    /// Speed away from the origin a sphere's particles start with.
+    pub speed: [f32; 2],
+    /// Particles let out at once when it starts.
+    pub burst: usize,
 }
 
-/// What a new particle starts with, each drawn between a lower and an upper bound.
+/// A value drawn at random between two bounds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Between<T> {
+    pub low: T,
+    pub high: T,
+    /// Shapes the draw: above 1 favours `low`.
+    pub exponent: f32,
+}
+
+impl<T: Copy> Between<T> {
+    pub fn fixed(value: T) -> Self {
+        Between {
+            low: value,
+            high: value,
+            exponent: 1.0,
+        }
+    }
+}
+
+/// What a new particle starts with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spawn {
-    pub life: [f32; 2],
-    pub size: [f32; 2],
-    pub alpha: [f32; 2],
-    pub color: [[f32; 3]; 2],
-    pub velocity: [[f32; 3]; 2],
-    pub rotation: [[f32; 3]; 2],
-    pub spin: [[f32; 3]; 2],
+    pub life: Between<f32>,
+    pub size: Between<f32>,
+    pub alpha: Between<f32>,
+    pub color: Between<[f32; 3]>,
+    pub velocity: Between<[f32; 3]>,
+    pub rotation: Between<[f32; 3]>,
+    pub spin: Between<[f32; 3]>,
 }
 
 impl Default for Spawn {
     fn default() -> Self {
         Spawn {
-            life: [1.0; 2],
-            size: [20.0; 2],
-            alpha: [1.0; 2],
-            color: [[1.0; 3]; 2],
-            velocity: [[0.0; 3]; 2],
-            rotation: [[0.0; 3]; 2],
-            spin: [[0.0; 3]; 2],
+            life: Between::fixed(1.0),
+            size: Between::fixed(20.0),
+            alpha: Between::fixed(1.0),
+            color: Between::fixed([1.0; 3]),
+            velocity: Between::fixed([0.0; 3]),
+            rotation: Between::fixed([0.0; 3]),
+            spin: Between::fixed([0.0; 3]),
         }
     }
 }
@@ -93,6 +116,9 @@ pub enum Operator {
 }
 
 const ROOT: &[&str] = &[
+    "animationmode",
+    "children",
+    "controlpoint",
     "emitter",
     "flags",
     "id",
@@ -102,10 +128,23 @@ const ROOT: &[&str] = &[
     "name",
     "operator",
     "renderer",
+    "sequencemultiplier",
     "starttime",
 ];
-const EMITTER: &[&str] = &["directions", "distancemax", "distancemin", "origin", "rate"];
-const RANGE: &[&str] = &["max", "min"];
+const EMITTER: &[&str] = &[
+    "directions",
+    "distancemax",
+    "distancemin",
+    "duration",
+    "flags",
+    "instantaneous",
+    "origin",
+    "rate",
+    "sign",
+    "speedmax",
+    "speedmin",
+];
+const RANGE: &[&str] = &["exponent", "max", "min"];
 const CHANGE: &[&str] = &["endtime", "endvalue", "starttime", "startvalue"];
 
 impl System {
@@ -119,6 +158,20 @@ impl System {
         known(root, ROOT, "particle system")?;
         if number(root.get("flags")).is_some_and(|flags| flags != 0.0) {
             return Err(refuse("particle system flags"));
+        }
+        // Sprite sheets and child systems; control points matter only to the operators that
+        // follow them, which are refused on their own.
+        if root
+            .get("animationmode")
+            .is_some_and(|mode| !mode.is_null())
+        {
+            return Err(refuse("particle sprite sheet animation"));
+        }
+        if root
+            .get("children")
+            .is_some_and(|children| children.as_array().is_some_and(|list| !list.is_empty()))
+        {
+            return Err(refuse("child particle systems"));
         }
         let material = text(root.get("material"))
             .ok_or_else(|| refuse("a particle system without a material"))?
@@ -171,6 +224,23 @@ fn emitter(value: &Value) -> Result<Emitter, Error> {
     if !(0.0..=10_000.0).contains(&rate) {
         return Err(refuse("an emitter rate out of range"));
     }
+    if number(value.get("flags")).is_some_and(|flags| flags != 0.0) {
+        return Err(refuse("emitter flags"));
+    }
+    if number(value.get("duration")).is_some_and(|duration| duration != 0.0) {
+        return Err(refuse("emitters that stop"));
+    }
+    let sign = vector(value.get("sign"), [0.0; 3]);
+    if sign[0] != 0.0 || sign[1] != 0.0 {
+        return Err(refuse("emitters signed along x or y"));
+    }
+    if shape == Shape::Box && (value.get("speedmin").is_some() || value.get("speedmax").is_some()) {
+        return Err(refuse("box emitters with a speed"));
+    }
+    let burst = number(value.get("instantaneous")).unwrap_or(0.0);
+    if !(0.0..=10_000.0).contains(&burst) {
+        return Err(refuse("an emitter burst out of range"));
+    }
     let bound = |key: &str, fill: f32| match shape {
         Shape::Box => vector(value.get(key), [fill; 3]),
         Shape::Sphere => [number(value.get(key)).unwrap_or(fill); 3],
@@ -182,39 +252,50 @@ fn emitter(value: &Value) -> Result<Emitter, Error> {
         min: bound("distancemin", 0.0),
         max: bound("distancemax", 256.0),
         directions: vector(value.get("directions"), [1.0, 1.0, 0.0]),
+        speed: [
+            number(value.get("speedmin")).unwrap_or(0.0),
+            number(value.get("speedmax")).unwrap_or(0.0),
+        ],
+        burst: burst as usize,
     })
 }
 
 fn initialize(value: &Value, spawn: &mut Spawn) -> Result<(), Error> {
     let kind = text(value.get("name"));
     known(value, RANGE, "initializer")?;
-    let scalar = |fill: [f32; 2]| {
-        [
-            number(value.get("min")).unwrap_or(fill[0]),
-            number(value.get("max")).unwrap_or(fill[1]),
-        ]
+    let exponent = number(value.get("exponent")).unwrap_or(1.0);
+    if !(0.01..=100.0).contains(&exponent) {
+        return Err(refuse("an initializer exponent out of range"));
+    }
+    let scalar = |fill: f32| Between {
+        low: number(value.get("min")).unwrap_or(fill),
+        high: number(value.get("max")).unwrap_or(fill),
+        exponent,
     };
-    let triple = |fill: [[f32; 3]; 2]| {
-        [
-            vector(value.get("min"), fill[0]),
-            vector(value.get("max"), fill[1]),
-        ]
+    let triple = |fill: [f32; 3]| Between {
+        low: vector(value.get("min"), fill),
+        high: vector(value.get("max"), fill),
+        exponent,
     };
     match kind {
-        Some("lifetimerandom") => spawn.life = scalar([1.0, 1.0]),
-        Some("sizerandom") => spawn.size = scalar([20.0, 20.0]),
-        Some("alpharandom") => spawn.alpha = scalar([1.0, 1.0]),
+        Some("lifetimerandom") => spawn.life = scalar(1.0),
+        Some("sizerandom") => spawn.size = scalar(20.0),
+        Some("alpharandom") => spawn.alpha = scalar(1.0),
         // Colours here are written in 0 to 255.
         Some("colorrandom") => {
-            spawn.color = triple([[255.0; 3]; 2]).map(|color| color.map(|c| c / 255.0))
+            let color = triple([255.0; 3]);
+            spawn.color = Between {
+                low: color.low.map(|c| c / 255.0),
+                high: color.high.map(|c| c / 255.0),
+                exponent,
+            }
         }
-        Some("velocityrandom") => spawn.velocity = triple([[0.0; 3]; 2]),
-        Some("rotationrandom") => spawn.rotation = triple([[0.0; 3]; 2]),
-        Some("angularvelocityrandom") => spawn.spin = triple([[0.0; 3]; 2]),
+        Some("velocityrandom") => spawn.velocity = triple([0.0; 3]),
+        Some("rotationrandom") => spawn.rotation = triple([0.0; 3]),
+        Some("angularvelocityrandom") => spawn.spin = triple([0.0; 3]),
         other => return Err(refuse(&format!("initializer {}", name(other)))),
     }
-    if spawn
-        .life
+    if [spawn.life.low, spawn.life.high]
         .iter()
         .any(|life| !(0.001..=600.0).contains(life))
     {
@@ -337,8 +418,8 @@ mod tests {
         assert_eq!((system.max, system.warmup), (300, 2.0));
         assert_eq!(system.emitters[0].shape, Shape::Box);
         assert_eq!(system.emitters[0].max, [960.0, 10.0, 0.0]);
-        assert_eq!(system.spawn.life, [2.0, 3.0]);
-        assert_eq!(system.spawn.color[1], [128.0 / 255.0, 128.0 / 255.0, 1.0]);
+        assert_eq!((system.spawn.life.low, system.spawn.life.high), (2.0, 3.0));
+        assert_eq!(system.spawn.color.high, [128.0 / 255.0, 128.0 / 255.0, 1.0]);
         assert_eq!(system.operators.len(), 2);
     }
 
@@ -352,8 +433,23 @@ mod tests {
             ),
             (
                 r#""name": "boxrandom""#,
-                r#""name": "boxrandom", "instantaneous": 5"#,
-                "emitter field instantaneous",
+                r#""name": "boxrandom", "audioprocessingmode": 3"#,
+                "emitter field audioprocessingmode",
+            ),
+            (
+                r#""name": "boxrandom""#,
+                r#""name": "boxrandom", "flags": 2"#,
+                "emitter flags",
+            ),
+            (
+                r#""starttime": 2"#,
+                r#""starttime": 2, "animationmode": "randomframe""#,
+                "sprite sheet",
+            ),
+            (
+                r#""starttime": 2"#,
+                r#""starttime": 2, "children": [{"name": "x"}]"#,
+                "child particle",
             ),
             (
                 r#""name": "movement""#,
@@ -362,8 +458,8 @@ mod tests {
             ),
             (
                 r#""starttime": 2"#,
-                r#""starttime": 2, "controlpoint": []"#,
-                "field controlpoint",
+                r#""starttime": 2, "controlpoints": []"#,
+                "field controlpoints",
             ),
             (
                 r#""rate": 40"#,

@@ -78,6 +78,7 @@ struct Resolved {
     fragment: Option<Arc<crate::shader::Fragment>>,
     blending: Blending,
     fullscreen: bool,
+    shade: [f32; 2],
 }
 
 impl Project {
@@ -320,8 +321,11 @@ impl Project {
             .map_err(|reason| Error::Format(reason.clone()))?
             .clone();
         let effects = self.effects(image, textures, remaining, still)?;
+        let mut image = image.clone();
+        image.brightness *= resolved.shade[0];
+        image.alpha *= resolved.shade[1];
         Ok(Layer {
-            image: image.clone(),
+            image,
             texture: Arc::clone(&resolved.texture),
             secondary: resolved.secondary.clone(),
             fragment: resolved.fragment.clone(),
@@ -351,6 +355,7 @@ impl Project {
         let material = self.material(material, textures)?;
         let names = material.names;
         let fragment = material.fragment;
+        let shade = material.shade;
         let mut decoded = Vec::with_capacity(names.len());
         for (slot, name) in names.into_iter().enumerate() {
             if let Some(name) = name {
@@ -367,6 +372,7 @@ impl Project {
             fragment,
             blending: material.blending,
             fullscreen: flag(model.get("fullscreen")).unwrap_or(false),
+            shade,
         })
     }
 }

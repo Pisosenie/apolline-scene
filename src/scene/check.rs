@@ -62,12 +62,19 @@ impl fmt::Display for Missing {
 const ROOT: &[&str] = &["camera", "general", "objects", "version"];
 
 /// `general` keys that are read, or that change nothing in a flat scene: the 3D lights'
-/// colours, the editor's preview and the projection's depth range.
+/// colours, the editor's preview, the projection's depth range, and the HDR bloom, wind and
+/// gravity settings while HDR, bloom and wind are off.
 const GENERAL: &[&str] = &[
     "ambientcolor",
     "bloom",
+    "bloomhdrfeather",
+    "bloomhdriterations",
+    "bloomhdrscatter",
+    "bloomhdrstrength",
+    "bloomhdrthreshold",
     "bloomstrength",
     "bloomthreshold",
+    "bloomtint",
     "camerafade",
     "cameraparallax",
     "cameraparallaxamount",
@@ -82,24 +89,40 @@ const GENERAL: &[&str] = &[
     "clearenabled",
     "farz",
     "fov",
+    "gravitydirection",
+    "gravitystrength",
+    "hdr",
     "nearz",
     "orthogonalprojection",
+    "perspectiveoverridefov",
     "skylightcolor",
+    "transparentsorting",
+    "winddirection",
+    "windenabled",
+    "windstrength",
     "zoom",
 ];
 
-/// Image layer keys that are read, or are the editor's own bookkeeping.
+/// Image layer keys that are read, or are the editor's own bookkeeping: `solid` makes a layer
+/// catch the pointer, `ledsource` feeds RGB devices, `copybackground` matters only to shaders
+/// that read the background, which are refused on their own.
 const IMAGE: &[&str] = &[
     "alignment",
     "alpha",
     "angles",
     "brightness",
+    "castshadow",
+    "clampuvs",
     "color",
     "colorBlendMode",
     "copybackground",
+    "dependencies",
+    "depthtest",
+    "disablepropagation",
     "effects",
     "id",
     "image",
+    "ledsource",
     "locktransforms",
     "name",
     "origin",
@@ -107,19 +130,40 @@ const IMAGE: &[&str] = &[
     "perspective",
     "scale",
     "size",
+    "solid",
     "visible",
+];
+
+/// Where a layer's origin is on it, as alignments name it.
+pub(crate) const ALIGNMENTS: &[&str] = &[
+    "center",
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "topleft",
+    "topright",
+    "bottomleft",
+    "bottomright",
 ];
 
 /// Particle system keys that are read, or are the editor's own bookkeeping.
 const PARTICLES: &[&str] = &[
     "angles",
+    "castshadow",
+    "dependencies",
+    "disablepropagation",
     "id",
+    "image",
+    "instanceoverride",
     "locktransforms",
+    "model",
     "name",
     "origin",
     "parallaxDepth",
     "particle",
     "scale",
+    "solid",
     "visible",
 ];
 
@@ -144,6 +188,12 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             note(Missing::UnknownKey(format!("general.{key}")));
         }
         let field = |name: &str| general.get(name);
+        if flag(field("hdr")) == Some(true) {
+            note(Missing::Setting("HDR rendering"));
+        }
+        if flag(field("windenabled")) == Some(true) {
+            note(Missing::Setting("wind"));
+        }
         if flag(field("bloom")) == Some(true) {
             note(Missing::Setting("the scene's bloom"));
         }
@@ -162,10 +212,11 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         let Some(fields) = object.as_object() else {
             continue;
         };
-        let known = if fields.contains_key("image") {
-            IMAGE
-        } else if fields.contains_key("particle") {
+        let set = |key: &str| fields.get(key).is_some_and(|value| !value.is_null());
+        let known = if set("particle") {
             PARTICLES
+        } else if set("image") {
+            IMAGE
         } else {
             continue;
         };
@@ -173,22 +224,20 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             note(Missing::UnknownKey(format!("objects[{at}].{key}")));
         }
         let field = |name: &str| fields.get(name);
-        if text(field("alignment")).is_some_and(|alignment| alignment != "center") {
-            note(Missing::Setting(
-                "layers aligned other than by their centre",
-            ));
+        if text(field("alignment")).is_some_and(|alignment| !ALIGNMENTS.contains(&alignment)) {
+            note(Missing::Setting("layers aligned in an unknown way"));
         }
         if number(field("colorBlendMode")).is_some_and(|mode| mode != 0.0) {
             note(Missing::Setting("colour blend modes"));
         }
-        if flag(field("copybackground")) == Some(true) {
-            note(Missing::Setting("layers that copy the background"));
-        }
-        if number(field("brightness")).is_some_and(|brightness| (brightness - 1.0).abs() > 1e-4) {
-            note(Missing::Setting("layer brightness"));
-        }
         if flag(field("perspective")) == Some(true) {
             note(Missing::Setting("perspective layers"));
+        }
+        if flag(field("castshadow")) == Some(true) {
+            note(Missing::Setting("layers that cast shadows"));
+        }
+        if fields.get("model").is_some_and(|model| !model.is_null()) {
+            note(Missing::Setting("3D models"));
         }
         for (key, value) in fields {
             animated(value, &format!("objects[{at}].{key}"), &mut note);

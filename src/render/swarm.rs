@@ -98,7 +98,7 @@ impl Swarm {
     }
 
     /// Brings the particles to `time` and fills the buffer with them where the system is
-    /// placed, returning how many there are.
+    /// placed, scaled and turned, returning how many there are.
     ///
     /// # Safety
     /// The GL context must be current on this thread.
@@ -108,17 +108,21 @@ impl Swarm {
         time: f32,
         origin: [f32; 2],
         scale: [f32; 2],
+        angle: f32,
     ) -> i32 {
         let mut simulation = self.simulation.borrow_mut();
         simulation.seek(time);
         let particles = simulation.particles();
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
+        let (sin, cos) = angle.sin_cos();
         for particle in particles {
+            let x = particle.position[0] * scale[0];
+            let y = particle.position[1] * scale[1];
             for value in [
-                origin[0] + particle.position[0] * scale[0],
-                origin[1] + particle.position[1] * scale[1],
+                origin[0] + cos * x - sin * y,
+                origin[1] + sin * x + cos * y,
                 particle.size * scale[0].abs(),
-                particle.rotation,
+                particle.rotation + angle,
                 particle.color[0],
                 particle.color[1],
                 particle.color[2],

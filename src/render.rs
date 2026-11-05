@@ -335,7 +335,7 @@ impl Renderer {
                 match &layer.swarm {
                     Some(swarm) => {
                         let scale = [layer.size.0, layer.size.1];
-                        let count = swarm.update(gl, time, layer.origin, scale);
+                        let count = swarm.update(gl, time, layer.origin, scale, layer.angle);
                         gl.bind_vertex_array(Some(swarm.vao));
                         gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
                         // The next layer may share the program but not these instances.

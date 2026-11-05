@@ -25,7 +25,7 @@ impl Project {
                 "scripted particles need another renderer".into(),
             ));
         }
-        let system = System::from_value(&json)?;
+        let system = overridden(System::from_value(&json)?, &placed.overrides)?;
         if !relative(&system.material) {
             return Err(Error::Format(
                 "particle material must stay inside the project".into(),
@@ -104,6 +104,8 @@ impl Project {
                 size: None,
                 color: [1.0; 3],
                 alpha: 1.0,
+                brightness: 1.0,
+                anchor: [0.0; 2],
                 visible: placed.visible,
                 depth: placed.depth,
                 effects: Vec::new(),
@@ -117,4 +119,65 @@ impl Project {
             particles: Some(Arc::new(system)),
         })
     }
+}
+
+/// The system as this instance changes it: each override scales what it names.
+fn overridden(
+    mut system: System,
+    overrides: &serde_json::Map<String, Value>,
+) -> Result<System, Error> {
+    for (key, value) in overrides {
+        if key == "id" {
+            continue;
+        }
+        let factor = || {
+            number(Some(value))
+                .filter(|factor| factor.is_finite() && (0.0..=100.0).contains(factor))
+                .ok_or_else(|| Error::Format(format!("particle override {key} out of range")))
+        };
+        match key.as_str() {
+            "count" => system.max = ((system.max as f32) * factor()?).min(10_000.0) as usize,
+            "rate" => {
+                let factor = factor()?;
+                for emitter in &mut system.emitters {
+                    emitter.rate *= factor;
+                }
+            }
+            "lifetime" => scale(&mut system.spawn.life, factor()?),
+            "size" => scale(&mut system.spawn.size, factor()?),
+            "alpha" => scale(&mut system.spawn.alpha, factor()?),
+            "speed" => {
+                let factor = factor()?;
+                let velocity = &mut system.spawn.velocity;
+                velocity.low = velocity.low.map(|v| v * factor);
+                velocity.high = velocity.high.map(|v| v * factor);
+                for emitter in &mut system.emitters {
+                    emitter.speed = emitter.speed.map(|v| v * factor);
+                }
+            }
+            "colorn" => {
+                let tint = crate::value::vector(Some(value), [1.0; 3]);
+                let color = &mut system.spawn.color;
+                for (channel, tint) in tint.iter().enumerate() {
+                    color.low[channel] *= tint;
+                    color.high[channel] *= tint;
+                }
+            }
+            _ => {
+                let key: String = key.chars().take(32).collect();
+                return Err(Error::Format(format!(
+                    "unsupported particle override {key}"
+                )));
+            }
+        }
+    }
+    if system.spawn.life.low < 0.001 || system.spawn.life.high < 0.001 {
+        return Err(Error::Format("particle override leaves no lifetime".into()));
+    }
+    Ok(system)
+}
+
+fn scale(range: &mut crate::particles::Between<f32>, factor: f32) {
+    range.low *= factor;
+    range.high *= factor;
 }

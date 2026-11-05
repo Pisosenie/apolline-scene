@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::system::{Operator, Shape, System};
+use super::system::{Between, Operator, Shape, System};
 
 /// Simulated in steps of a sixtieth of a second, whatever the frame rate.
 const RATE: f64 = 60.0;
@@ -66,6 +66,14 @@ impl Simulation {
         self.owed.iter_mut().for_each(|owed| *owed = 0.0);
         self.elapsed = 0.0;
         self.steps = 0;
+        for at in 0..self.system.emitters.len() {
+            for _ in 0..self.system.emitters[at].burst {
+                if self.particles.len() < self.system.max {
+                    let particle = self.spawn(at);
+                    self.particles.push(particle);
+                }
+            }
+        }
         let warmup = (f64::from(self.system.warmup) * RATE).round() as u64;
         for _ in 0..warmup {
             self.step();
@@ -136,7 +144,7 @@ impl Simulation {
         match emitter.shape {
             Shape::Box => {
                 for (axis, value) in offset.iter_mut().enumerate() {
-                    let distance = self.between(emitter.min[axis], emitter.max[axis]);
+                    let distance = self.uniform(emitter.min[axis], emitter.max[axis]);
                     let sign = if self.unit() < 0.5 { -1.0 } else { 1.0 };
                     *value = distance * sign * emitter.directions[axis];
                 }
@@ -147,27 +155,38 @@ impl Simulation {
                     *value = (self.unit() * 2.0 - 1.0) * emitter.directions[axis];
                 }
                 let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
-                let distance = self.between(emitter.min[0], emitter.max[0]);
+                let distance = self.uniform(emitter.min[0], emitter.max[0]);
                 if length > 1e-6 {
                     offset = direction.map(|v| v / length * distance);
                 }
             }
         }
-        let size = self.between(spawn.size[0], spawn.size[1]);
-        let alpha = self.between(spawn.alpha[0], spawn.alpha[1]);
+        let size = self.between(spawn.size);
+        let alpha = self.between(spawn.alpha);
         let color = self.within(spawn.color);
         let rotation = self.within(spawn.rotation);
         let born = Look { size, alpha, color };
+        let mut velocity = self.within(spawn.velocity);
+        // A sphere's particles also fly out from its centre.
+        if emitter.shape == Shape::Sphere && emitter.speed != [0.0; 2] {
+            let length = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let speed = self.uniform(emitter.speed[0], emitter.speed[1]);
+            if length > 1e-6 {
+                for (velocity, offset) in velocity.iter_mut().zip(offset) {
+                    *velocity += offset / length * speed;
+                }
+            }
+        }
         Particle {
             position: [0, 1, 2].map(|axis| emitter.origin[axis] + offset[axis]),
             size,
             rotation: rotation[2],
             color,
             alpha,
-            velocity: self.within(spawn.velocity),
+            velocity,
             spin: self.within(spawn.spin),
             age: 0.0,
-            life: self.between(spawn.life[0], spawn.life[1]),
+            life: self.between(spawn.life),
             born,
         }
     }
@@ -181,14 +200,20 @@ impl Simulation {
         bits as f32 / (1u64 << 24) as f32
     }
 
-    fn between(&mut self, low: f32, high: f32) -> f32 {
+    fn uniform(&mut self, low: f32, high: f32) -> f32 {
         low + (high - low) * self.unit()
     }
 
-    fn within(&mut self, range: [[f32; 3]; 2]) -> [f32; 3] {
+    fn between(&mut self, range: Between<f32>) -> f32 {
+        let along = self.unit().powf(range.exponent);
+        range.low + (range.high - range.low) * along
+    }
+
+    fn within(&mut self, range: Between<[f32; 3]>) -> [f32; 3] {
         let mut out = [0.0; 3];
         for (axis, value) in out.iter_mut().enumerate() {
-            *value = self.between(range[0][axis], range[1][axis]);
+            let along = self.unit().powf(range.exponent);
+            *value = range.low[axis] + (range.high[axis] - range.low[axis]) * along;
         }
         out
     }
@@ -318,6 +343,21 @@ mod tests {
                 .iter()
                 .all(|particle| particle.age < particle.life)
         );
+    }
+
+    #[test]
+    fn a_burst_comes_out_at_once_and_spheres_throw_outward() {
+        let burst = system(&FOUNTAIN.replace(
+            r#""rate": 30, "distancemax": 10"#,
+            r#""rate": 0, "instantaneous": 5, "speedmin": 50, "speedmax": 50, "distancemin": 10, "distancemax": 10"#,
+        ));
+        let simulation = Simulation::new(burst, 1);
+        assert_eq!(simulation.particles().len(), 5);
+        for particle in simulation.particles() {
+            let out = [particle.position[0] - 100.0, particle.position[1] - 100.0];
+            let along = out[0] * particle.velocity[0] + out[1] * (particle.velocity[1] - 100.0);
+            assert!(along > 0.0, "a particle flew inward");
+        }
     }
 
     #[test]
