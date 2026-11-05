@@ -2,7 +2,11 @@
 //! Image layers are read in full. Particles, sounds and lights are kept by kind only, so a
 //! host can tell what isn't drawn yet.
 
+mod check;
+
 use serde_json::Value;
+
+pub use check::Missing;
 
 use crate::Error;
 use crate::value::{flag, number, text, vector};
@@ -15,9 +19,8 @@ pub struct Scene {
     pub clear: [f32; 3],
     pub parallax: Option<Parallax>,
     pub objects: Vec<Object>,
-    /// Some value follows a property only under a condition, `{"user": {"name", "condition"}}`,
-    /// which isn't drawn yet: its stored value could show the wrong layers.
-    pub conditional: bool,
+    /// What in it isn't understood: keys, settings and changing values, read once.
+    refused: Vec<Missing>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,7 +96,7 @@ impl Scene {
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
             objects,
-            conditional: conditional(root),
+            refused: check::refusals(root),
         })
     }
 
@@ -106,39 +109,32 @@ impl Scene {
 
     /// What the scene has that isn't drawn yet, for a host deciding whether to hand it to
     /// another renderer.
-    pub fn missing(&self) -> Vec<&'static str> {
+    pub fn missing(&self) -> Vec<Missing> {
         let mut missing = Vec::new();
-        let mut note = |what: &'static str| {
+        let mut note = |what: Missing| {
             if !missing.contains(&what) {
                 missing.push(what);
             }
         };
         if self.perspective {
-            note("a 3D camera");
-        }
-        if self.conditional {
-            note("values tied to property conditions");
+            note(Missing::Camera3d);
         }
         for object in &self.objects {
             match object {
-                Object::Image(image) if image.effects > 0 => note("effects"),
-                Object::Particles(_) => note("particles"),
-                Object::Light => note("lights"),
-                Object::Other => note("unknown objects"),
+                Object::Image(image) if image.effects > 0 => note(Missing::Effects),
+                Object::Image(image) if image.angles[0] != 0.0 || image.angles[1] != 0.0 => {
+                    note(Missing::Rotation3d)
+                }
+                Object::Particles(_) => note(Missing::Particles),
+                Object::Light => note(Missing::Lights),
+                Object::Other => note(Missing::UnknownObject),
                 _ => {}
             }
         }
-        missing
-    }
-}
-
-fn conditional(value: &Value) -> bool {
-    match value {
-        Value::Object(fields) => {
-            fields.get("user").is_some_and(Value::is_object) || fields.values().any(conditional)
+        for refused in &self.refused {
+            note(refused.clone());
         }
-        Value::Array(items) => items.iter().any(conditional),
-        _ => false,
+        missing
     }
 }
 
@@ -218,20 +214,20 @@ mod tests {
         assert_eq!(images[1].scale, [1.5, 1.5, 1.0]);
         assert_eq!((images[1].alpha, images[1].visible), (0.6, false));
         assert_eq!(images[1].effects, 1);
-        assert_eq!(scene.missing(), ["effects", "particles"]);
+        assert_eq!(scene.missing(), [Missing::Effects, Missing::Particles]);
     }
 
     #[test]
     fn a_scene_without_an_orthogonal_size_is_3d() {
         let scene = Scene::parse(r#"{"general": {"fov": 50}, "objects": []}"#).unwrap();
         assert!(scene.perspective);
-        assert_eq!(scene.missing(), ["a 3D camera"]);
+        assert_eq!(scene.missing(), [Missing::Camera3d]);
         let tied = Scene::parse(
             r#"{"general": {"orthogonalprojection": {"width": 10, "height": 10}},
                 "objects": [{"image": "a.json", "visible": {"user": {"name": "style", "condition": "2"}, "value": true}}]}"#,
         )
         .unwrap();
-        assert_eq!(tied.missing(), ["values tied to property conditions"]);
+        assert_eq!(tied.missing(), [Missing::Conditional]);
         assert!(Scene::parse("not json").is_err());
     }
 }

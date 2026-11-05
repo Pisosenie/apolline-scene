@@ -14,7 +14,7 @@ mod value;
 
 pub use project::{Blending, Layer, Prepared, Project, TextureInput};
 pub use render::Renderer;
-pub use scene::Scene;
+pub use scene::{Missing, Scene};
 
 use std::fmt;
 

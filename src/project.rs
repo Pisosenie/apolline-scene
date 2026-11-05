@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::pkg::Package;
 use crate::properties::{self, Schema, Values};
-use crate::scene::{Image, Scene};
+use crate::scene::{Image, Missing, Scene};
 use crate::tex::Texture;
 use crate::value::{flag, text};
 
@@ -204,16 +204,11 @@ impl Project {
         let scene = Scene::from_value(&root)?;
         let mut missing = scene.missing();
         if !allow_parallax && scene.parallax.is_some() {
-            missing.push("pointer parallax");
-        }
-        if scene
-            .images()
-            .any(|image| image.angles[0] != 0.0 || image.angles[1] != 0.0)
-        {
-            missing.push("3D layer rotation");
+            missing.push(Missing::PointerParallax);
         }
         if !missing.is_empty() {
-            return Err(Error::Format(format!("needs {}", missing.join(", "))));
+            let named: Vec<String> = missing.iter().map(ToString::to_string).collect();
+            return Err(Error::Format(format!("needs {}", named.join(", "))));
         }
         let (layers, skipped) = self.prepare_layers(&scene, 512 * 1024 * 1024, true);
         if !skipped.is_empty() {

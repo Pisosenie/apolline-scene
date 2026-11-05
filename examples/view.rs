@@ -170,7 +170,8 @@ impl View {
         }
         let missing = scene.missing();
         if !missing.is_empty() {
-            eprintln!("view: not drawn yet: {}", missing.join(", "));
+            let named: Vec<String> = missing.iter().map(ToString::to_string).collect();
+            eprintln!("view: not drawn yet: {}", named.join(", "));
         }
         if self.shot.is_some() && (!skipped.is_empty() || !missing.is_empty()) {
             return Err("refusing a partial scene screenshot; resolve the reported unsupported resources first".into());
