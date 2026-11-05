@@ -27,11 +27,15 @@ pub(super) fn bind(
     let mut index = 0;
     while index < tokens.len() {
         let token = &tokens[index];
+        // `out` is a helper function's parameter after `(` or `,`; anywhere else it would
+        // declare a second output.
+        let parameter = index > 0 && matches!(tokens[index - 1].text, "(" | ",");
         if token.text.starts_with("apolline_")
             || matches!(
                 token.text,
-                "gl_FragData" | "gl_FragDepth" | "layout" | "attribute" | "out"
+                "gl_FragData" | "gl_FragDepth" | "layout" | "attribute"
             )
+            || (token.text == "out" && !parameter)
         {
             return Err(fail(format!(
                 "unsupported or reserved identifier {}",

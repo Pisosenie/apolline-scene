@@ -441,6 +441,9 @@ const COMPATIBILITY: &str = "\
 #define texSample2DLod textureLod
 #define frac fract
 #define saturate(x) clamp(x, 0.0, 1.0)
+#define lerp mix
+#define fmod(x, y) ((x) - (y) * trunc((x) / (y)))
+#define mul(x, y) ((y) * (x))
 #define atan2 atan
 #define ddx dFdx
 #define ddy dFdy
@@ -466,6 +469,14 @@ mod tests {
             constants.as_object().unwrap(),
             |path| Ok((path == "shaders/demo.frag").then(|| source.to_owned())),
         )
+    }
+
+    #[test]
+    fn helpers_may_hand_back_values_through_out_parameters_but_shaders_get_one_output() {
+        let helper = "void split(vec4 c, out vec3 rgb, out float a) { rgb = c.rgb; a = c.a; }\nvoid main() { vec3 rgb; float a; split(vec4(1.0), rgb, a); gl_FragColor = vec4(lerp(rgb, vec3(fmod(-3.0, 2.0)), 0.5), a); }";
+        assert!(prepare(helper, json!({}), json!({})).is_ok());
+        let second = "out vec4 extra;\nvoid main() { gl_FragColor = vec4(1.0); }";
+        assert!(prepare(second, json!({}), json!({})).is_err());
     }
 
     #[test]
