@@ -3,6 +3,7 @@
 
 pub mod dxt;
 mod files;
+pub mod particles;
 pub mod pkg;
 pub mod project;
 pub mod properties;
