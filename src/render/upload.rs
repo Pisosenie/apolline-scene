@@ -32,6 +32,13 @@ pub(super) unsafe fn upload(
         share(texture.image_height, first.height),
     ];
     let nearest = texture.flags & tex::NO_INTERPOLATION != 0;
+    // A texture repeats unless it says to clamp; one padded up to a larger size clamps anyway,
+    // since what it would repeat is the padding.
+    let wrap = if texture.flags & tex::CLAMP_UVS != 0 || uv_max != [1.0; 2] {
+        glow::CLAMP_TO_EDGE
+    } else {
+        glow::REPEAT
+    };
     unsafe {
         // The host shares this context with libmpv and its own drawing; an error flag they
         // left behind isn't this upload's.
@@ -77,8 +84,8 @@ pub(super) unsafe fn upload(
         for (name, value) in [
             (glow::TEXTURE_MIN_FILTER, min),
             (glow::TEXTURE_MAG_FILTER, mag),
-            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_S, wrap),
+            (glow::TEXTURE_WRAP_T, wrap),
         ] {
             gl.tex_parameter_i32(glow::TEXTURE_2D, name, value as i32);
         }

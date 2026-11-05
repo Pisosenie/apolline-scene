@@ -20,8 +20,9 @@ if args.without_mask and not args.mask_demo:
     parser.error("--without-mask requires --mask-demo")
 out = args.folder
 Path(out).mkdir(parents=True, exist_ok=True)
-def tex(fmt, w, h, pixels):
-    b = b"TEXV0005\0TEXI0001\0" + struct.pack("<7I", fmt, 0, w, h, w, h, 0) + b"TEXB0002\0"
+def tex(fmt, w, h, pixels, flags=2):
+    # Flag 2 clamps at the edges, as pictures do; tiling textures leave it out.
+    b = b"TEXV0005\0TEXI0001\0" + struct.pack("<7I", fmt, flags, w, h, w, h, 0) + b"TEXB0002\0"
     return b + struct.pack("<I", 1) + struct.pack("<I", 1) + struct.pack("<5I", w, h, 0, 0, len(pixels)) + pixels
 sky = bytes([40, 90, 200, 255] * 2 + [250, 150, 60, 255] * 2)  # top row blue, bottom row orange
 sun = bytearray()

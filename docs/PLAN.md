@@ -134,8 +134,9 @@ Known gaps in the material path, from review:
   helper — draw the same pixels on Mesa's GLES and on macOS's desktop GL (`tools/gles-check.sh`).
 - `{"user": {"name", "condition"}}` bindings aren't followed; `Scene::missing` names them, so
   such scenes go to linux-wallpaperengine.
-- Every texture is clamped at its edges. Wallpaper Engine's textures carry a flag for that,
-  so noise and other tiling textures read by effects probably want repeating instead.
+- A texture repeats unless its flags say to clamp, and one padded to a larger size clamps
+  anyway; effect targets clamp. Which flags real pictures and noise textures carry is for the
+  survey to show.
 - Without a vertex shader of its own, a `vec4 v_TexCoord` gets zeros in `zw`; `g_Color` and `g_Alpha` are always 1 with the tint
   applied after, and `g_TexelSize` follows the framebuffer rather than the layer.
 
