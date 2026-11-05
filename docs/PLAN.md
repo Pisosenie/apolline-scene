@@ -40,6 +40,56 @@ shipped.
 
 A scene that uses something not done yet goes on falling back to `linux-wallpaperengine`.
 
+## The road past linux-wallpaperengine
+
+A scene draws natively only when all of it is supported, so the order follows joint coverage
+of typical popular scenes. Public documentation (docs.wallpaperengine.io) gives what things
+mean, not how the files store them; Wallpaper Engine's own developer has said multi-pass
+effects and render targets aren't documented. So every format guess stays behind a refusal
+until the survey (A3), run on a real install, confirms it. A wrong native picture is worse
+than a lossless fallback.
+
+**A. Ground truth and safety**
+1. Split `render.rs` (layers, host state) and the project tests before they grow; the
+   renderer saves and restores the host's framebuffer and viewport around a draw.
+2. Refuse what isn't understood: an allowlist of keys per object kind and for `general`,
+   values with keys beside `user`/`value` (animated or scripted), visible `general` flags;
+   `Scene::missing` returns coded reasons the host and the survey can count.
+3. `examples/survey.rs`: run over a Workshop folder and the assets, it reports the shapes of
+   files (key paths, value types, counts, public vocabulary like effect and component names,
+   texture header numbers) and the refusal reasons, never shader text or pixels, and a
+   greedy list of what to support next.
+
+**B. Effects**
+1. Material values as uniforms instead of baked constants: one program per shader and combos,
+   values set per draw, which also makes live property edits possible.
+2. Material vertex shaders: `a_Position` and `a_TexCoord`, the documented matrices, varyings
+   matched by name and type between the stages.
+3. Effect instances and single-pass `effect.json`, parse-only, everything else refused.
+4. A render-target chain per layer: the layer, each pass ping-ponged, then the composite;
+   chains without time run once and are cached.
+5. Effects reach apolline-wall; `Project::prepare` is the authority on what it refuses.
+6. Engine inputs: pointer, daytime, parallax and audio spectrum (silence by default), and
+   `Renderer::needs` so the host wires only what is used.
+7. Multi-pass effects with named targets, once the survey shows their structure.
+8. Scene-level targets (`_rt_FullFrameBuffer`, bloom), once previews can be compared.
+
+**C. Animated textures**: the frame plumbing now, `TEXS` parsing once real headers are known.
+
+**D. Particles**: a deterministic simulation core (emitters, initializers, operators as the
+documentation names them, seeded), then parsing once the survey gives the JSON keys, then
+one instanced draw per system; control points, children, trails and audio after.
+
+**E. Timeline animations**, **F. text layers and SceneScript** (QuickJS with memory and time
+limits), **G. puppet warp**: each once its storage is known from real files. 3D scenes,
+lights and models are not planned.
+
+**Measured.** With real files: the corpus of the 200 most subscribed scenes, each shot
+natively and through linux-wallpaperengine as a black box, against the author's own preview;
+native coverage, the share that looks right for each, and start time, CPU and GPU per frame,
+memory, and nothing while covered. Now: `view --bench` on synthetic scenes (many layers,
+static and animated chains, thousands of particles), recorded per commit.
+
 ## Now
 
 Written and tested on files built in the tests and on macOS's desktop OpenGL; not one real
