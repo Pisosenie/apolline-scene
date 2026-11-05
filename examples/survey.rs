@@ -40,10 +40,18 @@ fn main() {
         std::process::exit(2);
     };
     let assets = args.next().map(PathBuf::from);
+    if let Some(assets) = assets.as_ref().filter(|assets| !assets.is_dir()) {
+        eprintln!("survey: {} isn't a folder", assets.display());
+        std::process::exit(1);
+    }
     let mut survey = Survey::default();
-    let mut folders: Vec<PathBuf> = std::fs::read_dir(&root)
-        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
-        .unwrap_or_default();
+    let mut folders: Vec<PathBuf> = match std::fs::read_dir(&root) {
+        Ok(entries) => entries.flatten().map(|entry| entry.path()).collect(),
+        Err(error) => {
+            eprintln!("survey: can't read {}: {error}", root.display());
+            std::process::exit(1);
+        }
+    };
     folders.sort();
     for folder in folders
         .iter()
