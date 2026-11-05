@@ -77,7 +77,15 @@ void main() {{
 /// in the layer's own units, centred.
 pub(super) fn model_view_projection(affine: &super::Affine, size: (f32, f32)) -> [f32; 16] {
     let [row0, row1] = affine;
-    let (width, height) = (size.0.max(1e-6), size.1.max(1e-6));
+    // A mirrored layer has a negative size, which a_Position carries too.
+    let away = |side: f32| {
+        if side.abs() < 1e-6 {
+            1e-6f32.copysign(side)
+        } else {
+            side
+        }
+    };
+    let (width, height) = (away(size.0), away(size.1));
     [
         row0[0] / width,
         row1[0] / width,
@@ -177,6 +185,26 @@ pub(super) unsafe fn set(
                     3 => gl.uniform_3_f32(location, x, y, z),
                     _ => gl.uniform_4_f32(location, x, y, z, w),
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_matrix_places_a_position_where_the_affine_places_its_corner() {
+        let affine = [[0.4, -0.3, 0.1], [0.2, 0.5, -0.2]];
+        for size in [(300.0, 200.0), (-300.0, 200.0), (300.0, -200.0)] {
+            let m = model_view_projection(&affine, size);
+            for local in [[0.5f32, 0.5], [-0.5, 0.5], [-0.5, -0.5]] {
+                let p = [local[0] * size.0, local[1] * size.1];
+                let x = m[0] * p[0] + m[4] * p[1] + m[12];
+                let y = m[1] * p[0] + m[5] * p[1] + m[13];
+                let want = |row: [f32; 3]| row[0] * local[0] + row[1] * local[1] + row[2];
+                assert!((x - want(affine[0])).abs() < 1e-5 && (y - want(affine[1])).abs() < 1e-5);
             }
         }
     }

@@ -14,6 +14,7 @@ parser.add_argument("--mask-format", choices=("r", "rg", "rgba"), default="r", h
 demos.add_argument("--wave-demo", action="store_true", help="apply a synthetic native animated wave material")
 demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and sun through pass-through materials with their own vertex shaders")
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
+demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
 if args.without_mask and not args.mask_demo:
@@ -138,32 +139,37 @@ if args.effect_demo:
     # Two inversions on the sun, the second through its own vertex shader, and a tint on the
     # sky that only the instance's own value and a white second texture leave as it was.
     scene = json.loads(files["scene.json"])
-    scene["objects"][0]["effects"] = [{"file": "effects/tint/effect.json", "passes": [{"constantshadervalues": {"color": "1 1 1"}}]}]
+    # The sky's chain has an odd number of draws, so a flip in each would show.
+    scene["objects"][0]["effects"] = [{"file": "effects/tint/effect.json", "passes": [{"constantshadervalues": {"color": "1 1 1"}}]}, {"file": "effects/copy/effect.json"}]
     scene["objects"][1]["effects"] = [{"file": "effects/invert/effect.json"}, {"file": "effects/invert/effect.json", "passes": [{"combos": {"STAGED": 1}}]}]
     files["scene.json"] = json.dumps(scene).encode()
     files["effects/invert/effect.json"] = b'{"name": "invert", "passes": [{"material": "materials/effects/invert.json"}]}'
     files["materials/effects/invert.json"] = b'{"passes": [{"shader": "effects/invert", "blending": "normal", "textures": [null]}]}'
-    files["shaders/effects/invert.vert"] = b'''// [COMBO] {"combo":"STAGED","default":0}
-attribute vec3 a_Position;
+    files["shaders/effects/invert.vert"] = b'''attribute vec3 a_Position;
 attribute vec2 a_TexCoord;
 uniform mat4 g_ModelViewProjectionMatrix;
 varying vec2 v_TexCoord;
 void main() {
     gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+    // STAGED is the fragment's combo, on by default; without it the picture would go.
 #if STAGED
     v_TexCoord = a_TexCoord;
 #else
-    v_TexCoord = a_TexCoord;
+    v_TexCoord = vec2(0.0);
 #endif
 }
 '''
-    files["shaders/effects/invert.frag"] = b'''varying vec2 v_TexCoord;
+    files["shaders/effects/invert.frag"] = b'''// [COMBO] {"combo":"STAGED","default":1}
+varying vec2 v_TexCoord;
 uniform sampler2D g_Texture0;
 void main() {
     vec4 pixel = texSample2D(g_Texture0, v_TexCoord);
     gl_FragColor = vec4(1.0 - pixel.rgb, pixel.a);
 }
 '''
+    files["effects/copy/effect.json"] = b'{"name": "copy", "passes": [{"material": "materials/effects/copy.json"}]}'
+    files["materials/effects/copy.json"] = b'{"passes": [{"shader": "effects/copy", "textures": [null]}]}'
+    files["shaders/effects/copy.frag"] = b"varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }\n"
     files["effects/tint/effect.json"] = b'{"name": "tint", "passes": [{"material": "materials/effects/tint.json"}]}'
     files["materials/effects/tint.json"] = b'{"passes": [{"shader": "effects/tint", "textures": [null, "util/white"], "constantshadervalues": {"color": "0 0 0"}}]}'
     files["materials/util/white.tex"] = tex(0, 1, 1, bytes([255, 255, 255, 255]))
@@ -175,6 +181,11 @@ void main() {
     gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(u_Color, 1.0) * texSample2D(g_Texture1, v_TexCoord);
 }
 '''
+if args.values_demo:
+    # One program, two layers: each must come out in its own colour.
+    files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'
+    files["materials/brick.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["brick"], "blending": "normal", "constantshadervalues": {"color": "0 0 1"}}]}'
+    files["shaders/demo/solid.frag"] = b"uniform sampler2D g_Texture0;\nuniform vec3 u_Color; // {\"material\":\"color\",\"default\":\"1 0 0\"}\nvoid main() { gl_FragColor = vec4(u_Color, 1.0); }\n"
 def string(t): t = t.encode(); return struct.pack("<I", len(t)) + t
 table, data, offset = b"", b"", 0
 for name, body in files.items():

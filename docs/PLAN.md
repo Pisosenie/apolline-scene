@@ -134,6 +134,9 @@ Known gaps in the material path, from review:
   helper — draw the same pixels on Mesa's GLES and on macOS's desktop GL (`tools/gles-check.sh`).
 - `{"user": {"name", "condition"}}` bindings aren't followed; `Scene::missing` names them, so
   such scenes go to linux-wallpaperengine.
+- A material or effect value the selected shader code doesn't read refuses the material.
+  Scene files may keep values for every option of an effect; if the survey shows that, such
+  values should be let through.
 - A texture repeats unless its flags say to clamp, and one padded to a larger size clamps
   anyway; effect targets clamp. Which flags real pictures and noise textures carry is for the
   survey to show.

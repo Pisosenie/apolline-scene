@@ -177,16 +177,24 @@ impl Template {
         let mut files = expansion.files;
         let vertex = match vertex {
             Some(vertex) => {
-                let mut values = vertex.combos.clone();
-                for (name, value) in values.iter_mut() {
-                    if let Some(chosen) = expansion.combos.get(name) {
-                        *value = *chosen;
-                    } else if let Some(chosen) = combos.get(name) {
-                        *value = integer(chosen)?;
+                // Both stages see the same combos: the fragment's, as the material and its
+                // textures set them, and the vertex shader's own beside them.
+                let mut values = expansion.combos.clone();
+                for (name, default) in &vertex.combos {
+                    if !values.contains_key(name) {
+                        let chosen = combos.get(name).map(integer).transpose()?;
+                        values.insert(name.clone(), chosen.unwrap_or(*default));
                     }
                 }
                 let selected = stage(&vertex.output, &values, &controlled)?;
                 let stage = parameters::bind(&selected, constants, missing, Stage::Vertex)?;
+                let tokens = parameters::tokens(&selected)?;
+                let named = |name: &str| tokens.iter().any(|token| token.text == name);
+                if named("a_Position") && !named("g_ModelViewProjectionMatrix") {
+                    return Err(fail(
+                        "a vertex shader that places a_Position without the matrix",
+                    ));
+                }
                 for varying in &bound.varyings {
                     if !stage.varyings.contains(varying) {
                         return Err(fail(format!(

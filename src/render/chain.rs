@@ -16,7 +16,8 @@ pub(super) struct Chain {
     size: (u32, u32),
     steps: Vec<Step>,
     animated: bool,
-    drawn: Cell<bool>,
+    /// The screen it was last drawn for, which effects can read.
+    drawn: Cell<Option<(u32, u32)>>,
 }
 
 /// Draws a whole target, with its top row first like an uploaded texture's.
@@ -47,7 +48,7 @@ impl Chain {
                 size,
                 steps,
                 animated,
-                drawn: Cell::new(false),
+                drawn: Cell::new(None),
             })
         }
     }
@@ -57,7 +58,8 @@ impl Chain {
         self.targets[(self.steps.len() - 1) % 2].texture
     }
 
-    /// Draws the chain unless nothing in it has changed since it was last drawn. Leaves its
+    /// Draws the chain unless nothing in it has changed since it was last drawn for this
+    /// screen. Leaves its
     /// own framebuffer bound.
     ///
     /// # Safety
@@ -71,7 +73,7 @@ impl Chain {
         time: f32,
         delta: f32,
     ) {
-        if self.drawn.get() && !self.animated {
+        if self.drawn.get() == Some(screen) && !self.animated {
             return;
         }
         let (width, height) = self.size;
@@ -83,6 +85,8 @@ impl Chain {
             for (at, step) in self.steps.iter().enumerate() {
                 let target = &self.targets[at % 2];
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
+                gl.clear_color(0.0, 0.0, 0.0, 0.0);
+                gl.clear(glow::COLOR_BUFFER_BIT);
                 let program = &programs[step.program];
                 gl.use_program(Some(program.id));
                 gl.bind_vertex_array(Some(program.vao));
@@ -98,7 +102,7 @@ impl Chain {
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
         }
-        self.drawn.set(true);
+        self.drawn.set(Some(screen));
     }
 
     /// # Safety

@@ -129,6 +129,8 @@ impl Renderer {
             eye: [0.0; 2],
         };
         let mut builder = build::Builder::new(gl);
+        // Making effect targets binds framebuffers; the host gets its own back.
+        let host = unsafe { state::Host::save(gl) };
         let prepared = (|| {
             if layers.len() > 4096 {
                 return Err(Error::Format("renderer exceeds 4096 layers".into()));
@@ -139,6 +141,7 @@ impl Renderer {
             }
             Ok(())
         })();
+        unsafe { host.restore(gl) };
         if let Err(error) = prepared {
             unsafe { renderer.delete(gl) };
             return Err(error);
@@ -330,8 +333,8 @@ unsafe fn bind(
                 false,
                 &material::model_view_projection(affine, size),
             );
-            gl.uniform_2_f32(program.layer_size.as_ref(), size.0, size.1);
         }
+        gl.uniform_2_f32(program.layer_size.as_ref(), size.0, size.1);
         gl.uniform_4_f32_slice(program.tint.as_ref(), &tint);
         gl.uniform_1_i32(program.channels.as_ref(), step.channels);
         for (location, value) in &step.constants {
