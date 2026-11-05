@@ -66,9 +66,10 @@ which aren't read.
 Known gaps in the material path, from review:
 - Sampler defaults follow the material's combos, but not combos that only turn on because a
   texture is bound.
-- GLSL ES 3.00 is stricter than desktop GL 3.3 about implicit int-to-float conversion, and
-  nothing has run on GLES yet. `mul`, `lerp` and `fmod` (truncating, as HLSL's does) and helpers
-  with `out` parameters compile and draw on desktop GL.
+- GLSL ES 3.00 is stricter than desktop GL 3.3 about implicit int-to-float conversion, which a
+  real Workshop shader may trip over. The synthetic ones — plain layers, a fragment material, a
+  mask, a time-driven wave, and `mul`, `lerp`, `fmod` (truncating, as HLSL's does) with an `out`
+  helper — draw the same pixels on Mesa's GLES and on macOS's desktop GL (`tools/gles-check.sh`).
 - `{"user": {"name", "condition"}}` bindings aren't followed; `Scene::missing` names them, so
   such scenes go to linux-wallpaperengine.
 - A `vec4 v_TexCoord` gets zeros in `zw`, `g_Color` and `g_Alpha` are always 1 with the tint
