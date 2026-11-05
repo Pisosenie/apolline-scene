@@ -15,6 +15,9 @@ pub struct Scene {
     pub clear: [f32; 3],
     pub parallax: Option<Parallax>,
     pub objects: Vec<Object>,
+    /// Some value follows a property only under a condition, `{"user": {"name", "condition"}}`,
+    /// which isn't drawn yet: its stored value could show the wrong layers.
+    pub conditional: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,6 +93,7 @@ impl Scene {
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
             objects,
+            conditional: conditional(&root),
         })
     }
 
@@ -112,6 +116,9 @@ impl Scene {
         if self.perspective {
             note("a 3D camera");
         }
+        if self.conditional {
+            note("values tied to property conditions");
+        }
         for object in &self.objects {
             match object {
                 Object::Image(image) if image.effects > 0 => note("effects"),
@@ -122,6 +129,16 @@ impl Scene {
             }
         }
         missing
+    }
+}
+
+fn conditional(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.get("user").is_some_and(Value::is_object) || fields.values().any(conditional)
+        }
+        Value::Array(items) => items.iter().any(conditional),
+        _ => false,
     }
 }
 
@@ -209,6 +226,12 @@ mod tests {
         let scene = Scene::parse(r#"{"general": {"fov": 50}, "objects": []}"#).unwrap();
         assert!(scene.perspective);
         assert_eq!(scene.missing(), ["a 3D camera"]);
+        let tied = Scene::parse(
+            r#"{"general": {"orthogonalprojection": {"width": 10, "height": 10}},
+                "objects": [{"image": "a.json", "visible": {"user": {"name": "style", "condition": "2"}, "value": true}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(tied.missing(), ["values tied to property conditions"]);
         assert!(Scene::parse("not json").is_err());
     }
 }

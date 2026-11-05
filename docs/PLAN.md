@@ -69,8 +69,8 @@ Known gaps in the material path, from review:
 - GLSL ES 3.00 is stricter than desktop GL 3.3 about implicit int-to-float conversion, and
   nothing has run on GLES yet; `mul`, `lerp` and `fmod` have no aliases, and helpers with `out`
   parameters are refused.
-- `{"user": {"name", "condition"}}` bindings keep their stored value instead of following the
-  property.
+- `{"user": {"name", "condition"}}` bindings aren't followed; `Scene::missing` names them, so
+  such scenes go to linux-wallpaperengine.
 - A `vec4 v_TexCoord` gets zeros in `zw`, `g_Color` and `g_Alpha` are always 1 with the tint
   applied after, and `g_TexelSize` follows the framebuffer rather than the layer.
 
