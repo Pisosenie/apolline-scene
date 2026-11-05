@@ -15,6 +15,7 @@ demos.add_argument("--wave-demo", action="store_true", help="apply a synthetic n
 demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and sun through pass-through materials with their own vertex shaders")
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
+demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
 if args.without_mask and not args.mask_demo:
@@ -186,6 +187,27 @@ if args.values_demo:
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'
     files["materials/brick.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["brick"], "blending": "normal", "constantshadervalues": {"color": "0 0 1"}}]}'
     files["shaders/demo/solid.frag"] = b"uniform sampler2D g_Texture0;\nuniform vec3 u_Color; // {\"material\":\"color\",\"default\":\"1 0 0\"}\nvoid main() { gl_FragColor = vec4(u_Color, 1.0); }\n"
+if args.particle_demo:
+    scene = json.loads(files["scene.json"])
+    scene["objects"].insert(3, {"name": "embers", "particle": "particles/embers.json", "origin": "960 100 0", "scale": "1 1 1"})
+    files["scene.json"] = json.dumps(scene).encode()
+    files["particles/embers.json"] = json.dumps({
+        "material": "materials/particle/ember.json", "maxcount": 200, "starttime": 2,
+        "emitter": [{"name": "boxrandom", "rate": 60, "distancemax": "700 20 0"}],
+        "initializer": [{"name": "lifetimerandom", "min": 2, "max": 4}, {"name": "sizerandom", "min": 10, "max": 30},
+                        {"name": "colorrandom", "min": "255 120 40", "max": "255 220 120"},
+                        {"name": "velocityrandom", "min": "-20 120 0", "max": "20 260 0"}],
+        "operator": [{"name": "movement", "gravity": "0 -20 0", "drag": 0.1},
+                     {"name": "alphafade", "fadeintime": 0.1, "fadeouttime": 0.6},
+                     {"name": "sizechange", "startvalue": 1, "endvalue": 0.3}],
+        "renderer": [{"name": "sprite"}]}).encode()
+    files["materials/particle/ember.json"] = b'{"passes": [{"shader": "genericparticle", "textures": ["particle/dot"], "blending": "additive"}]}'
+    dot = bytearray()
+    for y in range(16):
+        for x in range(16):
+            r = math.hypot(x - 7.5, y - 7.5) / 8
+            dot += bytes([255, 255, 255, max(0, min(255, int((1 - r) * 255)))])
+    files["materials/particle/dot.tex"] = tex(0, 16, 16, bytes(dot))
 def string(t): t = t.encode(); return struct.pack("<I", len(t)) + t
 table, data, offset = b"", b"", 0
 for name, body in files.items():

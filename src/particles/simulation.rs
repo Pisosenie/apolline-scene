@@ -86,6 +86,22 @@ impl Simulation {
         self.steps = due;
     }
 
+    /// Moves to `seconds` since the scene started, back to the start first if that's earlier
+    /// than where it is, so drawing the same moment twice changes nothing.
+    pub fn seek(&mut self, seconds: f32) {
+        if !seconds.is_finite() {
+            return;
+        }
+        let target = f64::from(seconds.max(0.0));
+        if target + 1e-6 < self.elapsed {
+            self.restart();
+        }
+        let ahead = target - self.elapsed;
+        if ahead > 0.0 {
+            self.advance(ahead as f32);
+        }
+    }
+
     pub fn particles(&self) -> &[Particle] {
         &self.particles
     }

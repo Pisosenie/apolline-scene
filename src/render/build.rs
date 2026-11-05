@@ -21,6 +21,8 @@ pub(super) struct Builder<'a> {
     gl: &'a glow::Context,
     textures: HashMap<*const Texture, (glow::Texture, [f32; 2])>,
     variants: HashMap<(Option<&'a str>, &'a str), usize>,
+    /// Our particle program, once a layer needs it.
+    particles: Option<usize>,
     source_bytes: usize,
     pub allocated: usize,
 }
@@ -31,6 +33,7 @@ impl<'a> Builder<'a> {
             gl,
             textures: HashMap::new(),
             variants: HashMap::new(),
+            particles: None,
             source_bytes: 0,
             allocated: 0,
         }
@@ -95,6 +98,9 @@ impl<'a> Builder<'a> {
             );
             unsafe { self.chain(renderer, layer, own, size)? }
         };
+        if let Some(system) = &layer.particles {
+            return unsafe { self.particles(renderer, layer, system, step) };
+        }
         let image = &layer.image;
         let (origin, size) = if layer.fullscreen {
             ([scene.size.0 / 2.0, scene.size.1 / 2.0], scene.size)
@@ -112,10 +118,53 @@ impl<'a> Builder<'a> {
         Ok(Drawn {
             step,
             chain,
+            swarm: None,
             origin,
             size,
             angle: image.angles[2],
             tint: [image.color[0], image.color[1], image.color[2], image.alpha],
+            blending: layer.blending,
+            depth: image.depth,
+        })
+    }
+
+    /// A particle system's layer: its sprite texture through our particle program.
+    unsafe fn particles(
+        &mut self,
+        renderer: &mut Renderer,
+        layer: &Layer,
+        system: &Arc<crate::particles::System>,
+        mut step: Step,
+    ) -> Result<Drawn, Error> {
+        if step.program != 0 || !layer.effects.is_empty() {
+            return Err(Error::Format(
+                "particles with a material of their own".into(),
+            ));
+        }
+        step.program = match self.particles {
+            Some(index) => index,
+            None => {
+                let program = unsafe {
+                    super::program(self.gl, super::swarm::VERTEX, super::swarm::FRAGMENT)?
+                };
+                renderer.programs.push(program);
+                let index = renderer.programs.len() - 1;
+                self.particles = Some(index);
+                index
+            }
+        };
+        reserve(&mut self.allocated, super::swarm::Swarm::bytes(system))?;
+        let seed = renderer.layers.len() as u64;
+        let swarm = unsafe { super::swarm::Swarm::new(self.gl, system, seed)? };
+        let image = &layer.image;
+        Ok(Drawn {
+            step,
+            chain: None,
+            swarm: Some(swarm),
+            origin: [image.origin[0], image.origin[1]],
+            size: (image.scale[0], image.scale[1]),
+            angle: 0.0,
+            tint: [1.0; 4],
             blending: layer.blending,
             depth: image.depth,
         })

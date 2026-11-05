@@ -15,7 +15,6 @@ pub enum Missing {
     Camera3d,
     Rotation3d,
     PointerParallax,
-    Particles,
     Lights,
     UnknownObject,
     Conditional,
@@ -34,7 +33,6 @@ impl Missing {
             Missing::Camera3d => "camera3d",
             Missing::Rotation3d => "rotation3d",
             Missing::PointerParallax => "pointer-parallax",
-            Missing::Particles => "particles",
             Missing::Lights => "lights",
             Missing::UnknownObject => "unknown-object",
             Missing::Conditional => "conditional",
@@ -51,7 +49,6 @@ impl fmt::Display for Missing {
             Missing::Camera3d => f.write_str("a 3D camera"),
             Missing::Rotation3d => f.write_str("3D layer rotation"),
             Missing::PointerParallax => f.write_str("pointer parallax"),
-            Missing::Particles => f.write_str("particles"),
             Missing::Lights => f.write_str("lights"),
             Missing::UnknownObject => f.write_str("unknown objects"),
             Missing::Conditional => f.write_str("values tied to property conditions"),
@@ -113,6 +110,19 @@ const IMAGE: &[&str] = &[
     "visible",
 ];
 
+/// Particle system keys that are read, or are the editor's own bookkeeping.
+const PARTICLES: &[&str] = &[
+    "angles",
+    "id",
+    "locktransforms",
+    "name",
+    "origin",
+    "parallaxDepth",
+    "particle",
+    "scale",
+    "visible",
+];
+
 /// Everything in a scene that isn't understood, each once.
 pub(super) fn refusals(root: &Value) -> Vec<Missing> {
     let mut found = Vec::new();
@@ -152,10 +162,14 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         let Some(fields) = object.as_object() else {
             continue;
         };
-        if !fields.contains_key("image") {
+        let known = if fields.contains_key("image") {
+            IMAGE
+        } else if fields.contains_key("particle") {
+            PARTICLES
+        } else {
             continue;
-        }
-        for key in fields.keys().filter(|key| !IMAGE.contains(&key.as_str())) {
+        };
+        for key in fields.keys().filter(|key| !known.contains(&key.as_str())) {
             note(Missing::UnknownKey(format!("objects[{at}].{key}")));
         }
         let field = |name: &str| fields.get(name);

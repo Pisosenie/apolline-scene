@@ -19,7 +19,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 cargo build --quiet --example view --manifest-path "$root/Cargo.toml"
 view=${CARGO_TARGET_DIR:-$root/target}/debug/examples/view
-projects=(demo fragment mask wave vertex effect values dialect)
+projects=(demo fragment mask wave vertex effect values particle dialect)
 python3 "$root/tools/demo-scene.py" "$work/demo" > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/fragment" --fragment-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/mask" --mask-demo > /dev/null
@@ -27,6 +27,7 @@ python3 "$root/tools/demo-scene.py" "$work/wave" --wave-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/vertex" --vertex-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/effect" --effect-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 # Wallpaper Engine's dialect: lerp, fmod (truncating, so this one comes out black), mul, and a
 # helper with out parameters, on a red clear colour that shows if the material is refused.
 mkdir -p "$work/dialect/shaders" "$work/dialect/materials"

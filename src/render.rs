@@ -8,6 +8,7 @@ mod compile;
 mod geometry;
 mod material;
 mod state;
+mod swarm;
 mod target;
 mod upload;
 
@@ -77,6 +78,9 @@ struct Drawn {
     step: Step,
     /// The layer's effects, drawn first; `step` then places their result.
     chain: Option<chain::Chain>,
+    /// Particles drawn with `step`'s texture instead of a picture; `origin` places the
+    /// system and `size` scales it.
+    swarm: Option<swarm::Swarm>,
     origin: [f32; 2],
     size: (f32, f32),
     angle: f32,
@@ -117,7 +121,7 @@ impl Renderer {
     /// # Safety
     /// `gl` has to be current on this thread.
     pub unsafe fn new(gl: &glow::Context, scene: &Scene, layers: &[Layer]) -> Result<Self, Error> {
-        let program = unsafe { program(gl)? };
+        let program = unsafe { program(gl, VERTEX, FRAGMENT)? };
         let mut renderer = Renderer {
             programs: vec![program],
             layers: Vec::new(),
@@ -160,14 +164,15 @@ impl Renderer {
         self.textures.len()
     }
 
-    /// Whether an active GPU program needs time or frame delta updates.
+    /// Whether an active GPU program or a particle system needs time or frame delta updates.
     pub fn animated(&self) -> bool {
-        self.programs.iter().any(|program| {
-            program
-                .frame
-                .as_ref()
-                .is_some_and(material::Frame::animated)
-        })
+        self.layers.iter().any(|layer| layer.swarm.is_some())
+            || self.programs.iter().any(|program| {
+                program
+                    .frame
+                    .as_ref()
+                    .is_some_and(material::Frame::animated)
+            })
     }
 
     /// Moves the parallax towards the pointer, -1..1 across the target with y up, taking the
@@ -256,11 +261,20 @@ impl Renderer {
                     }
                     current_program = Some(layer.step.program);
                 }
-                let origin = [
-                    layer.origin[0] + shift[0] * layer.depth[0],
-                    layer.origin[1] + shift[1] * layer.depth[1],
-                ];
-                let affine = place_fitted(self.size, target, origin, layer.size, layer.angle, fit);
+                let moved = [shift[0] * layer.depth[0], shift[1] * layer.depth[1]];
+                let origin = [layer.origin[0] + moved[0], layer.origin[1] + moved[1]];
+                let (affine, size) = match &layer.swarm {
+                    // Particles are placed in scene units over the whole scene.
+                    Some(_) => {
+                        let centre = [self.size.0 / 2.0 + moved[0], self.size.1 / 2.0 + moved[1]];
+                        let whole = place_fitted(self.size, target, centre, self.size, 0.0, fit);
+                        (whole, self.size)
+                    }
+                    None => (
+                        place_fitted(self.size, target, origin, layer.size, layer.angle, fit),
+                        layer.size,
+                    ),
+                };
                 match layer.blending {
                     Blending::Opaque => gl.disable(glow::BLEND),
                     Blending::Translucent => {
@@ -272,16 +286,18 @@ impl Renderer {
                         gl.blend_func(glow::SRC_ALPHA, glow::ONE);
                     }
                 }
-                bind(
-                    gl,
-                    program,
-                    &layer.step,
-                    &affine,
-                    layer.size,
-                    layer.tint,
-                    None,
-                );
-                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                bind(gl, program, &layer.step, &affine, size, layer.tint, None);
+                match &layer.swarm {
+                    Some(swarm) => {
+                        let scale = [layer.size.0, layer.size.1];
+                        let count = swarm.update(gl, time, layer.origin, scale);
+                        gl.bind_vertex_array(Some(swarm.vao));
+                        gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
+                        // The next layer may share the program but not these instances.
+                        current_program = None;
+                    }
+                    None => gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4),
+                }
             }
             gl.disable(glow::BLEND);
             gl.disable(glow::SCISSOR_TEST);
@@ -300,6 +316,9 @@ impl Renderer {
             }
             for chain in self.layers.iter().filter_map(|layer| layer.chain.as_ref()) {
                 chain.delete(gl);
+            }
+            for swarm in self.layers.iter().filter_map(|layer| layer.swarm.as_ref()) {
+                swarm.delete(gl);
             }
             for program in self.programs {
                 gl.delete_vertex_array(program.vao);
@@ -362,10 +381,11 @@ fn header(gl: &glow::Context) -> &'static str {
     }
 }
 
-unsafe fn program(gl: &glow::Context) -> Result<Program, Error> {
+/// One of our own programs: the plain layer's, or the particle sprites'.
+unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Program, Error> {
     let fail = |what: String| Error::Format(format!("the layer shader: {what}"));
     unsafe {
-        let id = compile::link(gl, VERTEX, FRAGMENT)?;
+        let id = compile::link(gl, vertex, fragment)?;
         let result = (|| {
             let uniform = |name| gl.get_uniform_location(id, name);
             let row0 = uniform("row0");
@@ -383,7 +403,7 @@ unsafe fn program(gl: &glow::Context) -> Result<Program, Error> {
                 row1,
                 uv_max,
                 mvp: None,
-                layer_size: None,
+                layer_size: uniform("apolline_layer_size"),
                 tint,
                 channels: uniform("picture_channels"),
                 frame: None,

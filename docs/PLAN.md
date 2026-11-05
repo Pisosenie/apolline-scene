@@ -117,6 +117,14 @@ Wallpaper Engine file has been read yet.
   drawn once. Named targets (`fbos`, `target`, `bind`), passes that blend and animated values
   are refused by name, so the survey can count them. `--effect-demo` draws exactly what the
   plain demo draws, through two inversions and a tint.
+- Particles (D1–D3): box and sphere emitters; lifetime, size, alpha, colour, velocity,
+  rotation and spin initializers; movement, angular movement, alpha fade, size, alpha and
+  colour change operators; one sprite renderer with the plain `genericparticle` material.
+  Simulated in sixtieths of a second from the host's scene time with a fixed seed, so the
+  same moment always looks the same; `starttime` warms the system up. Drawn as instanced
+  sprites in scene order. Everything else — control points, turbulence, ropes, sprite
+  sheets, instance overrides — is refused by name. Key names and units (colours in 0–255,
+  life shares for fades) are guesses for the survey to confirm.
 - `examples/survey.rs` (A3): the shapes of a real install, for deciding what comes next.
 - apolline-wall draws the scenes this covers with `Project::prepare` and flattens still ones
   once; everything else still goes to linux-wallpaperengine.

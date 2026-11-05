@@ -1,6 +1,6 @@
 //! `scene.json`: the scene's size, camera and parallax, and its objects in drawing order.
-//! Image layers are read in full. Particles, sounds and lights are kept by kind only, so a
-//! host can tell what isn't drawn yet.
+//! Image layers and particle systems are read in full. Sounds and lights are kept by kind
+//! only, so a host can tell what isn't drawn yet.
 
 mod check;
 
@@ -33,7 +33,7 @@ pub struct Parallax {
 
 pub enum Object {
     Image(Image),
-    Particles(String),
+    Particles(Particles),
     Sound,
     Light,
     Other,
@@ -57,6 +57,19 @@ pub struct Image {
     pub depth: [f32; 2],
     /// The effects on it that are shown, as the scene gives them, in drawing order.
     pub effects: Vec<Value>,
+}
+
+/// A particle system placed in the scene.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Particles {
+    pub name: String,
+    /// The system's own file, `particles/….json`.
+    pub file: String,
+    pub origin: [f32; 3],
+    pub scale: [f32; 3],
+    pub angles: [f32; 3],
+    pub visible: bool,
+    pub depth: [f32; 2],
 }
 
 const DEFAULT_SIZE: (f32, f32) = (1920.0, 1080.0);
@@ -124,7 +137,9 @@ impl Scene {
                 Object::Image(image) if image.angles[0] != 0.0 || image.angles[1] != 0.0 => {
                     note(Missing::Rotation3d)
                 }
-                Object::Particles(_) => note(Missing::Particles),
+                Object::Particles(particles) if particles.angles != [0.0; 3] => {
+                    note(Missing::Setting("turned particle systems"))
+                }
                 Object::Light => note(Missing::Lights),
                 Object::Other => note(Missing::UnknownObject),
                 _ => {}
@@ -162,8 +177,16 @@ fn object(value: &Value) -> Object {
                 .collect(),
         });
     }
-    if let Some(particles) = text(field("particle")) {
-        return Object::Particles(particles.to_owned());
+    if let Some(file) = text(field("particle")) {
+        return Object::Particles(Particles {
+            name: text(field("name")).unwrap_or_default().to_owned(),
+            file: file.to_owned(),
+            origin: vector(field("origin"), [0.0; 3]),
+            scale: vector(field("scale"), [1.0; 3]),
+            angles: vector(field("angles"), [0.0; 3]),
+            visible: flag(field("visible")).unwrap_or(true),
+            depth: vector(field("parallaxDepth"), [1.0; 2]),
+        });
     }
     if field("sound").is_some() {
         return Object::Sound;
@@ -213,7 +236,7 @@ mod tests {
         assert_eq!(images[1].scale, [1.5, 1.5, 1.0]);
         assert_eq!((images[1].alpha, images[1].visible), (0.6, false));
         assert_eq!(images[1].effects.len(), 1);
-        assert_eq!(scene.missing(), [Missing::Particles]);
+        assert_eq!(scene.missing(), []);
     }
 
     #[test]

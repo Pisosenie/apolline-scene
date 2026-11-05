@@ -4,6 +4,7 @@
 
 mod effect;
 mod material;
+mod particle;
 
 pub use effect::EffectPass;
 
@@ -17,7 +18,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::pkg::Package;
 use crate::properties::{self, Schema, Values};
-use crate::scene::{Image, Missing, Scene};
+use crate::scene::{Image, Missing, Object, Scene};
 use crate::tex::Texture;
 use crate::value::{flag, text};
 
@@ -52,6 +53,8 @@ pub struct Layer {
     pub fullscreen: bool,
     /// Its effects' passes, drawn in order over its picture before it's placed in the scene.
     pub effects: Vec<EffectPass>,
+    /// A particle system drawn with its texture, in place of a picture.
+    pub particles: Option<Arc<crate::particles::System>>,
 }
 
 /// A texture bound to an explicit secondary sampler slot.
@@ -184,6 +187,7 @@ impl Project {
                 .iter()
                 .chain(layer.effects.iter().map(|pass| &pass.fragment))
                 .any(|fragment| fragment.animated)
+                || layer.particles.is_some()
         }) {
             return Err(Error::Format(
                 "time-dependent materials need animated scene playback".into(),
@@ -244,15 +248,35 @@ impl Project {
         let mut omitted = 0;
         let mut textures = material::Resources::default();
         let mut models = HashMap::new();
-        if scene.images().count() > 4096 {
-            skipped.push("scene exceeds 4096 image layers".into());
+        let shown: Vec<&Object> = scene
+            .objects
+            .iter()
+            .filter(|object| match object {
+                Object::Image(image) => image.visible,
+                Object::Particles(particles) => particles.visible,
+                _ => false,
+            })
+            .collect();
+        if shown.len() > 4096 {
+            skipped.push("scene exceeds 4096 layers".into());
         }
-        for image in scene.images().filter(|image| image.visible).take(4096) {
-            match self.layer(image, &mut models, &mut textures, &mut remaining, still) {
+        for object in shown.into_iter().take(4096) {
+            let (name, layer) = match object {
+                Object::Image(image) => (
+                    &image.name,
+                    self.layer(image, &mut models, &mut textures, &mut remaining, still),
+                ),
+                Object::Particles(particles) => (
+                    &particles.name,
+                    self.particle_layer(particles, &mut textures, &mut remaining),
+                ),
+                _ => continue,
+            };
+            match layer {
                 Ok(layer) => layers.push(layer),
                 Err(err) => {
                     if skipped.len() < 64 {
-                        let name: String = image.name.chars().take(160).collect();
+                        let name: String = name.chars().take(160).collect();
                         let reason: String = diagnostic(&err);
                         skipped.push(format!("{name}: {reason}"));
                     } else {
@@ -293,6 +317,7 @@ impl Project {
             blending: resolved.blending,
             fullscreen: resolved.fullscreen,
             effects,
+            particles: None,
         })
     }
 
