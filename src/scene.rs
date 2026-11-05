@@ -93,7 +93,7 @@ impl Scene {
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
             objects,
-            conditional: conditional(&root),
+            conditional: conditional(root),
         })
     }
 
