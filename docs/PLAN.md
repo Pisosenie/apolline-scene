@@ -40,6 +40,23 @@ shipped.
 
 A scene that uses something not done yet goes on falling back to `linux-wallpaperengine`.
 
+## What the first survey showed
+
+60 of the most subscribed scenes and what they pull in (81 scene projects), surveyed
+2026-11-06 with `tools/survey-set.py` and `examples/survey.rs`. Eight draw natively whole and
+match their authors' previews. What holds the rest, by scenes:
+
+- SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers.
+- Particle system `flags`, 31, and child systems, sprite sheets, ropes and trails, 10 each.
+- Render targets (`_rt_FullFrameBuffer` and friends), 23: blend modes, composition layers.
+- Text layers and groups, 29 (`unknown-object`); `parent` links 724 objects to others.
+- Solid colour layers (`flat`, no texture), 14.
+- Named targets in effects (`fbos`: godrays, blur, shine), 10.
+- Big scenes over the 512 MiB texture budget, since DXT textures are decoded to RGBA.
+
+Guesses it confirmed: pictures carry the clamp flag; particle key names; `VERSION` being the
+only combo on most plain image materials.
+
 ## The road past linux-wallpaperengine
 
 A scene draws natively only when all of it is supported, so the order follows joint coverage
