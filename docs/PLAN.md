@@ -49,8 +49,9 @@ match their authors' previews. What holds the rest, by scenes:
 - SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers.
 - Particle system `flags`, 31, and child systems, sprite sheets, ropes and trails, 10 each.
 - Render targets (`_rt_FullFrameBuffer` and friends), 23: blend modes, composition layers.
-- Text layers and groups, 29 (`unknown-object`); `parent` links 724 objects to others.
-- Solid colour layers (`flat`, no texture), 14.
+- Text layers, 29 (`unknown-object`). Groups, `parent` links and solid colour layers are
+  drawn since: a child's origin is in its parent's units, turned and scaled with it, and a
+  hidden parent hides it unless it disables propagation.
 - Named targets in effects (`fbos`: godrays, blur, shine), 10.
 - Big scenes over the 512 MiB texture budget, since DXT textures are decoded to RGBA.
 
