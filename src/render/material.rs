@@ -106,12 +106,40 @@ pub(super) fn model_view_projection(affine: &super::Affine, size: (f32, f32)) ->
     ]
 }
 
+/// What the engine gives shaders besides time, as the host last set it.
+pub(super) struct Inputs {
+    /// Where the pointer is across the screen, 0 to 1 from the top left.
+    pub pointer: [f32; 2],
+    /// Where the parallax has got to, in the same terms.
+    pub parallax: [f32; 2],
+    /// How far through the local day it is, 0 to 1.
+    pub daytime: f32,
+    /// The left and right audio spectrum in 64 bins, low to high; silence is all zeros.
+    pub spectrum: [[f32; 64]; 2],
+}
+
+impl Default for Inputs {
+    fn default() -> Self {
+        Inputs {
+            pointer: [0.5; 2],
+            parallax: [0.5; 2],
+            daytime: 0.5,
+            spectrum: [[0.0; 64]; 2],
+        }
+    }
+}
+
 pub(super) struct Frame {
     screen: Option<glow::UniformLocation>,
     time: Option<glow::UniformLocation>,
     delta: Option<glow::UniformLocation>,
     texel: Option<glow::UniformLocation>,
     half_texel: Option<glow::UniformLocation>,
+    pointer: Option<glow::UniformLocation>,
+    parallax: Option<glow::UniformLocation>,
+    pub daytime: Option<glow::UniformLocation>,
+    /// 16, 32 and 64 bins, left then right.
+    spectrum: [[Option<glow::UniformLocation>; 3]; 2],
 }
 
 impl Frame {
@@ -123,12 +151,33 @@ impl Frame {
                 delta: gl.get_uniform_location(program, "g_Frametime"),
                 texel: gl.get_uniform_location(program, "g_TexelSize"),
                 half_texel: gl.get_uniform_location(program, "g_TexelSizeHalf"),
+                pointer: gl.get_uniform_location(program, "g_PointerPosition"),
+                parallax: gl.get_uniform_location(program, "g_ParallaxPosition"),
+                daytime: gl.get_uniform_location(program, "g_Daytime"),
+                spectrum: ["Left", "Right"].map(|side| {
+                    [16, 32, 64].map(|bins| {
+                        gl.get_uniform_location(program, &format!("g_AudioSpectrum{bins}{side}"))
+                    })
+                }),
             }
         }
     }
 
+    /// Whether it reads something that changes from frame to frame.
     pub(super) fn animated(&self) -> bool {
-        self.time.is_some() || self.delta.is_some()
+        self.time.is_some()
+            || self.delta.is_some()
+            || self.pointer.is_some()
+            || self.parallax.is_some()
+            || self.listens()
+    }
+
+    pub(super) fn points(&self) -> bool {
+        self.pointer.is_some() || self.parallax.is_some()
+    }
+
+    pub(super) fn listens(&self) -> bool {
+        self.spectrum.iter().flatten().any(Option::is_some)
     }
 
     /// # Safety
@@ -140,6 +189,7 @@ impl Frame {
         target: (u32, u32),
         time: f32,
         delta: f32,
+        inputs: &Inputs,
     ) {
         let width = target.0.max(1) as f32;
         let height = target.1.max(1) as f32;
@@ -162,6 +212,19 @@ impl Frame {
             );
             gl.uniform_2_f32(self.texel.as_ref(), 1.0 / width, 1.0 / height);
             gl.uniform_2_f32(self.half_texel.as_ref(), 0.5 / width, 0.5 / height);
+            gl.uniform_2_f32_slice(self.pointer.as_ref(), &inputs.pointer);
+            gl.uniform_2_f32_slice(self.parallax.as_ref(), &inputs.parallax);
+            gl.uniform_1_f32(self.daytime.as_ref(), inputs.daytime);
+            for (locations, bins) in self.spectrum.iter().zip(inputs.spectrum.iter()) {
+                let mut bins = bins.to_vec();
+                for location in locations.iter().rev() {
+                    gl.uniform_1_f32_slice(location.as_ref(), &bins);
+                    bins = bins
+                        .chunks(2)
+                        .map(|pair| (pair[0] + pair[1]) / 2.0)
+                        .collect();
+                }
+            }
         }
     }
 }

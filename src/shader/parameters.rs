@@ -31,6 +31,26 @@ pub(super) enum Stage {
     Fragment,
 }
 
+/// What a shader reads from the engine beyond time, which the host has to supply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Reads {
+    pub pointer: bool,
+    pub parallax: bool,
+    pub daytime: bool,
+    pub audio: bool,
+}
+
+impl Reads {
+    pub fn with(self, other: Reads) -> Reads {
+        Reads {
+            pointer: self.pointer || other.pointer,
+            parallax: self.parallax || other.parallax,
+            daytime: self.daytime || other.daytime,
+            audio: self.audio || other.audio,
+        }
+    }
+}
+
 pub(super) struct Bound {
     pub body: String,
     pub texcoord: u8,
@@ -41,6 +61,7 @@ pub(super) struct Bound {
     pub used: HashSet<String>,
     /// Name and type of each varying, in order.
     pub varyings: Vec<(String, String)>,
+    pub reads: Reads,
 }
 
 pub(super) struct Token<'a> {
@@ -67,6 +88,7 @@ pub(super) fn bind(
     let mut animated = false;
     let mut bound = Vec::new();
     let mut varyings = Vec::new();
+    let mut reads = Reads::default();
     let mut index = 0;
     while index < tokens.len() {
         let token = &tokens[index];
@@ -94,6 +116,24 @@ pub(super) fn bind(
             .ok_or_else(|| fail("incomplete shader declaration"))?;
         let kind = declaration[1].text;
         let name = declaration[2].text;
+        // The audio spectrum is the one array, by its own names and lengths.
+        if token.text == "uniform" && kind == "float" && declaration[3].text == "[" {
+            let rest = &tokens[index + 4..];
+            let close = rest.iter().take(4).position(|token| token.text == "]");
+            let length = close
+                .filter(|close| *close > 0)
+                .map(|close| &source[rest[0].start..rest[close - 1].end]);
+            let ends = close.and_then(|close| rest.get(close + 1));
+            if let (Some(bins), Some(length), Some(end)) = (spectrum(name), length, ends)
+                && length == bins.to_string()
+                && end.text == ";"
+                && seen.insert(name)
+            {
+                reads.audio = true;
+                index += 4 + close.unwrap_or(0) + 2;
+                continue;
+            }
+        }
         if declaration[3].text != ";" || !super::identifier(name) || !seen.insert(name) {
             return Err(fail(
                 "arrays, duplicate declarations and complex uniforms are unsupported",
@@ -183,6 +223,16 @@ pub(super) fn bind(
         ) {
             continue;
         }
+        let input = match (name, kind) {
+            ("g_PointerPosition", "vec2") => Some(&mut reads.pointer),
+            ("g_ParallaxPosition", "vec2") => Some(&mut reads.parallax),
+            ("g_Daytime", "float") => Some(&mut reads.daytime),
+            _ => None,
+        };
+        if let Some(read) = input {
+            *read = true;
+            continue;
+        }
         let neutral = match (name, kind) {
             ("g_Color", "vec3") => Some("vec3(1.0)"),
             ("g_Color4", "vec4") => Some("vec4(1.0)"),
@@ -238,6 +288,7 @@ pub(super) fn bind(
         constants: bound,
         used,
         varyings,
+        reads,
     })
 }
 
@@ -358,4 +409,18 @@ pub(super) fn tokens(source: &str) -> Result<Vec<Token<'_>>, Error> {
         });
     }
     Ok(tokens)
+}
+
+/// How many bins an audio spectrum uniform holds, by its name.
+fn spectrum(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("g_AudioSpectrum")?;
+    let bins = rest
+        .strip_suffix("Left")
+        .or_else(|| rest.strip_suffix("Right"))?;
+    match bins {
+        "16" => Some(16),
+        "32" => Some(32),
+        "64" => Some(64),
+        _ => None,
+    }
 }

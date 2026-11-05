@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::Error;
 pub(crate) use parameters::Constant;
+pub use parameters::Reads;
 use parameters::Stage;
 use serde_json::{Map, Value};
 
@@ -28,6 +29,8 @@ pub struct Fragment {
     pub(crate) constants: Vec<(String, Constant)>,
     /// The material's own vertex shader, when it has one.
     pub(crate) vertex: Option<String>,
+    /// What it reads from the engine beyond time.
+    pub reads: Reads,
     bindings: Option<u8>,
     pub(crate) files: Vec<String>,
 }
@@ -215,6 +218,7 @@ impl Template {
                 bound.used.extend(stage.used);
                 bound.inputs |= stage.inputs;
                 bound.animated |= stage.animated;
+                bound.reads = bound.reads.with(stage.reads);
                 files.extend(vertex.files);
                 Some(source(VERTEX, &values, &stage.body, VERTEX_MAIN)?)
             }
@@ -236,6 +240,7 @@ impl Template {
         Ok(Fragment {
             source: source(FRAGMENT, &expansion.combos, &bound.body, FRAGMENT_MAIN)?,
             vertex,
+            reads: bound.reads,
             texcoord: bound.texcoord,
             inputs: bound.inputs,
             animated: bound.animated,
@@ -658,7 +663,7 @@ mod tests {
     #[test]
     fn unsupported_dynamic_inputs_and_ignored_parameters_are_refused() {
         for declaration in [
-            "uniform float g_Daytime;",
+            "uniform vec4 g_LightsColor;",
             "uniform sampler2D g_Texture8;",
             "uniform sampler2D g_Texture0; // {\"combo\":\"MASK\"}",
             "varying vec2 customUV;",
@@ -674,11 +679,11 @@ mod tests {
 
     #[test]
     fn only_selected_declarations_contribute_uniforms_and_texture_slots() {
-        let source = "// [COMBO] {\"combo\":\"LIVE\",\"default\":0}\n#if LIVE\nuniform float g_Daytime;\n#else\nvarying vec4 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy); }\n#endif\n#if 0\nuniform sampler2D g_Texture7;\ninvalid syntax $ ! ;\n#endif";
+        let source = "// [COMBO] {\"combo\":\"LIVE\",\"default\":0}\n#if LIVE\nuniform vec4 g_LightsColor;\n#else\nvarying vec4 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy); }\n#endif\n#if 0\nuniform sampler2D g_Texture7;\ninvalid syntax $ ! ;\n#endif";
         let selected = prepare(source, json!({}), json!({})).unwrap();
         assert_eq!(selected.texcoord, 4);
         assert!(selected.validate_inputs(1).is_ok());
-        assert!(!selected.source.contains("g_Daytime"));
+        assert!(!selected.source.contains("g_LightsColor"));
         assert!(!selected.source.contains("g_Texture7"));
         assert!(prepare(source, json!({"LIVE":1}), json!({})).is_err());
         // Explicit unused values remain errors, including values for an inactive branch.
@@ -820,6 +825,27 @@ mod tests {
                 .to_string()
                 .contains("unknown material constant")
         );
+    }
+
+    #[test]
+    fn engine_inputs_are_named_in_what_a_shader_reads() {
+        let reads =
+            |source: &str| prepare(source, json!({}), json!({})).map(|fragment| fragment.reads);
+        let all = reads("uniform vec2 g_PointerPosition;\nuniform float g_Daytime;\nuniform float g_AudioSpectrum16Left[16];\nuniform float g_AudioSpectrum64Right[ 64 ];\nvoid main() { gl_FragColor = vec4(g_PointerPosition, g_Daytime, g_AudioSpectrum16Left[0] + g_AudioSpectrum64Right[63]); }").unwrap();
+        assert!(all.pointer && all.daytime && all.audio && !all.parallax);
+        assert_eq!(reads("void main() {}").unwrap(), Reads::default());
+        for refused in [
+            "uniform float g_AudioSpectrum16Left[32];",
+            "uniform float g_AudioSpectrum12Left[12];",
+            "uniform float u_Values[4];",
+            "uniform vec2 g_Daytime;",
+            "uniform float g_AudioSpectrum16Left[16];\nuniform float g_AudioSpectrum16Left[16];",
+        ] {
+            assert!(
+                reads(&format!("{refused}\nvoid main() {{}}")).is_err(),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

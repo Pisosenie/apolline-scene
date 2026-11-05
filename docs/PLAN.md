@@ -117,6 +117,11 @@ Wallpaper Engine file has been read yet.
   drawn once. Named targets (`fbos`, `target`, `bind`), passes that blend and animated values
   are refused by name, so the survey can count them. `--effect-demo` draws exactly what the
   plain demo draws, through two inversions and a tint.
+- Engine inputs (B6): `g_PointerPosition` and `g_ParallaxPosition` (0 to 1 from the top
+  left, a guess), `g_Daytime` from `Renderer::set_daytime`, and the audio spectrum in 16,
+  32 and 64 bins a side from `Renderer::set_spectrum`, silent until a host gives one.
+  `Renderer::needs` says which a scene uses. `prepare` refuses pointer readers as it does
+  pointer parallax, since no host feeds the pointer yet; a snapshot sees it at the centre.
 - Particles (D1–D3): box and sphere emitters; lifetime, size, alpha, colour, velocity,
   rotation and spin initializers; movement, angular movement, alpha fade, size, alpha and
   colour change operators; one sprite renderer with the plain `genericparticle` material.

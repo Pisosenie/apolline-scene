@@ -162,3 +162,18 @@ fn what_effects_do_that_isnt_drawn_is_refused_by_name() {
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
+
+#[test]
+fn a_pointer_reader_waits_for_a_host_that_gives_the_pointer() {
+    let folder = scene("effect-pointer", r#"[{"file":"effects/copy/effect.json"}]"#);
+    std::fs::write(
+        folder.join("shaders/effects/copy.frag"),
+        "varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nuniform vec2 g_PointerPosition;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord + g_PointerPosition); }",
+    )
+    .unwrap();
+    let project = Project::open(&folder, None).unwrap();
+    assert!(refusal(&folder).contains("pointer parallax"));
+    let snapshot = project.prepare_snapshot().unwrap();
+    assert!(snapshot.layers[0].effects[0].fragment.reads.pointer);
+    std::fs::remove_dir_all(folder).unwrap();
+}

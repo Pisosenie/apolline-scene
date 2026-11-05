@@ -186,7 +186,7 @@ impl Project {
                 .fragment
                 .iter()
                 .chain(layer.effects.iter().map(|pass| &pass.fragment))
-                .any(|fragment| fragment.animated)
+                .any(|fragment| fragment.animated || fragment.reads.audio)
                 || layer.particles.is_some()
         }) {
             return Err(Error::Format(
@@ -201,7 +201,8 @@ impl Project {
         self.prepare_inner(false)
     }
 
-    /// A complete deterministic frame; pointer parallax stays at the renderer's neutral eye.
+    /// A complete deterministic frame; pointer parallax and shaders that read the pointer see
+    /// it at the centre until the host moves it with `Renderer::follow`.
     pub fn prepare_snapshot(&self) -> Result<Prepared, Error> {
         self.prepare_inner(true)
     }
@@ -223,6 +224,16 @@ impl Project {
         let (layers, skipped) = self.prepare_layers(&scene, 512 * 1024 * 1024, true);
         if !skipped.is_empty() {
             return Err(Error::Format(skipped.join("; ")));
+        }
+        let pointed = layers.iter().any(|layer| {
+            layer
+                .fragment
+                .iter()
+                .chain(layer.effects.iter().map(|pass| &pass.fragment))
+                .any(|fragment| fragment.reads.pointer || fragment.reads.parallax)
+        });
+        if !allow_parallax && pointed {
+            return Err(Error::Format(format!("needs {}", Missing::PointerParallax)));
         }
         Ok(Prepared { scene, layers })
     }

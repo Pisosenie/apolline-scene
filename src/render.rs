@@ -113,6 +113,15 @@ pub struct Renderer {
     parallax: Option<Parallax>,
     /// Where the parallax has got to on its way to the pointer, -1..1 across the target.
     eye: [f32; 2],
+    inputs: Box<material::Inputs>,
+}
+
+/// What a renderer's shaders read that only the host can give.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Needs {
+    pub pointer: bool,
+    pub daytime: bool,
+    pub audio: bool,
 }
 
 impl Renderer {
@@ -131,6 +140,7 @@ impl Renderer {
             clear: scene.clear,
             parallax: scene.parallax,
             eye: [0.0; 2],
+            inputs: Box::default(),
         };
         let mut builder = build::Builder::new(gl);
         // Making effect targets binds framebuffers; the host gets its own back.
@@ -178,15 +188,50 @@ impl Renderer {
     /// Moves the parallax towards the pointer, -1..1 across the target with y up, taking the
     /// scene's delay to get there. Returns whether it moved.
     pub fn follow(&mut self, pointer: [f32; 2], seconds: f32) -> bool {
+        let across = |at: [f32; 2]| [(at[0] + 1.0) / 2.0, (1.0 - at[1]) / 2.0];
+        let pointed = across(pointer);
+        let moved = pointed != self.inputs.pointer && self.needs().pointer;
+        self.inputs.pointer = pointed;
         let Some(parallax) = self.parallax else {
-            return false;
+            return moved;
         };
         let before = self.eye;
         self.eye = toward(self.eye, pointer, seconds, parallax.delay);
-        before
-            .iter()
-            .zip(self.eye)
-            .any(|(was, now)| (was - now).abs() > 1e-4)
+        self.inputs.parallax = across(self.eye);
+        moved
+            || before
+                .iter()
+                .zip(self.eye)
+                .any(|(was, now)| (was - now).abs() > 1e-4)
+    }
+
+    /// How far through the local day it is, 0 to 1, for shaders that change with it.
+    pub fn set_daytime(&mut self, daytime: f32) {
+        if daytime.is_finite() {
+            self.inputs.daytime = daytime.rem_euclid(1.0);
+        }
+    }
+
+    /// The audio spectrum, left and right, in 64 bins from low to high and about 0 to 1.
+    pub fn set_spectrum(&mut self, left: &[f32; 64], right: &[f32; 64]) {
+        let clean =
+            |bins: &[f32; 64]| bins.map(|bin| if bin.is_finite() { bin.max(0.0) } else { 0.0 });
+        self.inputs.spectrum = [clean(left), clean(right)];
+    }
+
+    /// What the scene's shaders read that the host has to supply: the pointer through
+    /// `follow`, the time of day and the audio spectrum.
+    pub fn needs(&self) -> Needs {
+        let frames = || {
+            self.programs
+                .iter()
+                .filter_map(|program| program.frame.as_ref())
+        };
+        Needs {
+            pointer: self.parallax.is_some() || frames().any(material::Frame::points),
+            daytime: frames().any(|frame| frame.daytime.is_some()),
+            audio: frames().any(material::Frame::listens),
+        }
     }
 
     /// Draws at zero time/delta into the bound framebuffer, `target` pixels in size.
@@ -233,7 +278,7 @@ impl Renderer {
             gl.color_mask(true, true, true, true);
             gl.blend_equation(glow::FUNC_ADD);
             for chain in self.layers.iter().filter_map(|layer| layer.chain.as_ref()) {
-                chain.run(gl, &self.programs, target, time, delta);
+                chain.run(gl, &self.programs, target, time, delta, &self.inputs);
             }
             host.bind(gl);
             gl.viewport(0, 0, target.0 as i32, target.1 as i32);
@@ -257,7 +302,7 @@ impl Renderer {
                     gl.use_program(Some(program.id));
                     gl.bind_vertex_array(Some(program.vao));
                     if let Some(frame) = &program.frame {
-                        frame.update(gl, target, target, time, delta);
+                        frame.update(gl, target, target, time, delta, &self.inputs);
                     }
                     current_program = Some(layer.step.program);
                 }

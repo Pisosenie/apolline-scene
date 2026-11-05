@@ -72,6 +72,7 @@ impl Chain {
         screen: (u32, u32),
         time: f32,
         delta: f32,
+        inputs: &super::material::Inputs,
     ) {
         if self.drawn.get() == Some(screen) && !self.animated {
             return;
@@ -91,7 +92,7 @@ impl Chain {
                 gl.use_program(Some(program.id));
                 gl.bind_vertex_array(Some(program.vao));
                 if let Some(frame) = &program.frame {
-                    frame.update(gl, screen, self.size, time, delta);
+                    frame.update(gl, screen, self.size, time, delta, inputs);
                 }
                 let before = (at > 0).then(|| Input {
                     slot: 0,

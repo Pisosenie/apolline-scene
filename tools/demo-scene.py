@@ -16,6 +16,7 @@ demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and 
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
+demos.add_argument("--inputs-demo", action="store_true", help="read the pointer, parallax, daytime and audio at their resting values, which leave the sky as it is")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
 if args.without_mask and not args.mask_demo:
@@ -208,6 +209,21 @@ if args.particle_demo:
             r = math.hypot(x - 7.5, y - 7.5) / 8
             dot += bytes([255, 255, 255, max(0, min(255, int((1 - r) * 255)))])
     files["materials/particle/dot.tex"] = tex(0, 16, 16, bytes(dot))
+if args.inputs_demo:
+    files["materials/sky.json"] = b'{"passes": [{"shader": "demo/inputs", "textures": ["sky"], "blending": "normal"}]}'
+    files["shaders/demo/inputs.frag"] = b"""varying vec2 v_TexCoord;
+uniform sampler2D g_Texture0;
+uniform vec2 g_PointerPosition;
+uniform vec2 g_ParallaxPosition;
+uniform float g_Daytime;
+uniform float g_AudioSpectrum16Left[16];
+uniform float g_AudioSpectrum64Right[64];
+void main() {
+    float one = g_PointerPosition.x * 2.0 * g_ParallaxPosition.y * 2.0 * g_Daytime * 2.0;
+    one *= 1.0 - g_AudioSpectrum16Left[3] - g_AudioSpectrum64Right[60];
+    gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(vec3(one), 1.0);
+}
+"""
 def string(t): t = t.encode(); return struct.pack("<I", len(t)) + t
 table, data, offset = b"", b"", 0
 for name, body in files.items():
