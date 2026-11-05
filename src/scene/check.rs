@@ -18,8 +18,10 @@ pub enum Missing {
     Lights,
     UnknownObject,
     Conditional,
-    /// A value that changes over time or is computed, at this key path.
+    /// A value that changes over time, at this key path.
     Animated(String),
+    /// A script on a value scripts aren't run for yet, at this key path.
+    Scripted(String),
     /// A key no one has checked, at this path.
     UnknownKey(String),
     /// A setting that changes the picture and isn't drawn yet.
@@ -37,6 +39,7 @@ impl Missing {
             Missing::UnknownObject => "unknown-object",
             Missing::Conditional => "conditional",
             Missing::Animated(_) => "animated",
+            Missing::Scripted(_) => "scripted",
             Missing::UnknownKey(_) => "unknown-key",
             Missing::Setting(_) => "setting",
         }
@@ -52,7 +55,8 @@ impl fmt::Display for Missing {
             Missing::Lights => f.write_str("lights"),
             Missing::UnknownObject => f.write_str("unknown objects"),
             Missing::Conditional => f.write_str("values tied to property conditions"),
-            Missing::Animated(path) => write!(f, "an animated or scripted value at {path}"),
+            Missing::Animated(path) => write!(f, "an animated value at {path}"),
+            Missing::Scripted(path) => write!(f, "a script at {path}"),
             Missing::UnknownKey(path) => write!(f, "an unknown key {path}"),
             Missing::Setting(what) => f.write_str(what),
         }
@@ -243,6 +247,12 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         {
             GROUP
         } else {
+            // Scripts only run on what's drawn; one anywhere else may move what is.
+            for (key, value) in fields {
+                if nested_script(value) {
+                    note(Missing::Scripted(format!("objects[{at}].{key}")));
+                }
+            }
             continue;
         };
         for key in fields.keys().filter(|key| !known.contains(&key.as_str())) {
@@ -265,13 +275,32 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             note(Missing::Setting("3D models"));
         }
         for (key, value) in fields {
-            animated(value, &format!("objects[{at}].{key}"), &mut note);
+            if super::SCRIPTABLE.contains(&key.as_str())
+                && known.contains(&key.as_str())
+                && run(value)
+            {
+                continue;
+            }
+            let path = format!("objects[{at}].{key}");
+            if nested_script(value) {
+                note(Missing::Scripted(path));
+            } else {
+                animated(value, &path, &mut note);
+            }
         }
     }
     if let Some(general) = root.get("general").and_then(Value::as_object) {
         for (key, value) in general {
-            animated(value, &format!("general.{key}"), &mut note);
+            let path = format!("general.{key}");
+            if nested_script(value) {
+                note(Missing::Scripted(path));
+            } else {
+                animated(value, &path, &mut note);
+            }
         }
+    }
+    if root.get("camera").is_some_and(nested_script) {
+        note(Missing::Scripted("camera".into()));
     }
     if conditional(root) {
         note(Missing::Conditional);
@@ -286,8 +315,37 @@ fn animated(value: &Value, path: &str, note: &mut impl FnMut(Missing)) {
         && fields.contains_key("value")
         && fields.keys().any(|key| key != "value" && key != "user")
     {
-        note(Missing::Animated(path.to_owned()));
+        note(if fields.contains_key("script") {
+            Missing::Scripted(path.to_owned())
+        } else {
+            Missing::Animated(path.to_owned())
+        });
     }
+}
+
+/// A script anywhere in a value: on an effect's values, a particle override, anything the
+/// scene's scripts don't run.
+fn nested_script(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.get("script").is_some_and(Value::is_string) || fields.values().any(nested_script)
+        }
+        Value::Array(items) => items.iter().any(nested_script),
+        _ => false,
+    }
+}
+
+/// A value with a script on it and nothing else that changes it, which the scene's scripts run.
+fn run(value: &Value) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields.get("script").is_some_and(Value::is_string)
+            && fields.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "script" | "scriptproperties" | "value" | "user"
+                )
+            })
+    })
 }
 
 /// `{"user": {"name": …, "condition": …}}` anywhere: a value that follows a property only
@@ -339,5 +397,29 @@ mod tests {
             assert!(found.contains(&missing), "{missing} not in {found:?}");
         }
         assert_eq!(Missing::Animated("x".into()).code(), "animated");
+    }
+
+    #[test]
+    fn scripts_run_only_on_drawn_objects_own_values() {
+        let script = json!({"script": "export function update(v) { return v; }", "value": 1});
+        let scene = json!({
+            "general": {"zoom": script},
+            "objects": [
+                {"image": "a.json", "alpha": script, "visible": script,
+                 "effects": [{"file": "e.json", "passes": [{"constantshadervalues": {"speed": script}}]}]},
+                {"particle": "p.json", "instanceoverride": {"rate": script}},
+                {"name": "group", "origin": script},
+                {"sound": ["a.mp3"], "volume": script}
+            ]
+        });
+        assert_eq!(
+            refusals(&scene),
+            [
+                Missing::Scripted("objects[0].effects".into()),
+                Missing::Scripted("objects[1].instanceoverride".into()),
+                Missing::Scripted("objects[3].volume".into()),
+                Missing::Scripted("general.zoom".into()),
+            ]
+        );
     }
 }

@@ -7,12 +7,38 @@ use std::sync::Arc;
 use glow::HasContext;
 
 use super::chain::Chain;
-use super::{Drawn, Input, Program, Renderer, Step, Values, material, reserve, upload};
+use super::{Base, Drawn, Input, Program, Renderer, Step, Values, material, reserve, upload};
 use crate::Error;
 use crate::project::Layer;
 use crate::scene::Scene;
 use crate::shader::Fragment;
 use crate::tex::Texture;
+
+/// A layer where its object is now.
+fn placed(
+    step: Step,
+    chain: Option<Chain>,
+    swarm: Option<super::swarm::Swarm>,
+    layer: &Layer,
+    base: Base,
+) -> Drawn {
+    let mut drawn = Drawn {
+        step,
+        chain,
+        swarm,
+        origin: [0.0; 2],
+        size: (0.0, 0.0),
+        angle: 0.0,
+        tint: [1.0; 4],
+        blending: layer.blending,
+        depth: layer.image.depth,
+        object: layer.object,
+        base,
+        visible: true,
+    };
+    drawn.pose(&layer.image.pose());
+    drawn
+}
 
 /// Effect targets are at most this many pixels on a side.
 const TARGET_SIDE: u32 = 8192;
@@ -102,42 +128,23 @@ impl<'a> Builder<'a> {
             return unsafe { self.particles(renderer, layer, system, step) };
         }
         let image = &layer.image;
-        let (origin, size) = if layer.fullscreen {
-            ([scene.size.0 / 2.0, scene.size.1 / 2.0], scene.size)
+        let base = if layer.fullscreen {
+            Base::Whole {
+                scene: scene.size,
+                shade: layer.shade,
+            }
         } else {
             let natural = (
                 layer.texture.image_width as f32,
                 layer.texture.image_height as f32,
             );
-            let (w, h) = image.size.unwrap_or(natural);
-            let size = (w * image.scale[0], h * image.scale[1]);
-            // The origin is the anchor's place; the layer's centre is that far back from it.
-            let (sin, cos) = image.angles[2].sin_cos();
-            let [ax, ay] = [image.anchor[0] * size.0, image.anchor[1] * size.1];
-            (
-                [
-                    image.origin[0] - (cos * ax - sin * ay),
-                    image.origin[1] - (sin * ax + cos * ay),
-                ],
-                size,
-            )
+            Base::Picture {
+                size: image.size.unwrap_or(natural),
+                anchor: image.anchor,
+                shade: layer.shade,
+            }
         };
-        Ok(Drawn {
-            step,
-            chain,
-            swarm: None,
-            origin,
-            size,
-            angle: image.angles[2],
-            tint: [
-                image.color[0] * image.brightness,
-                image.color[1] * image.brightness,
-                image.color[2] * image.brightness,
-                image.alpha,
-            ],
-            blending: layer.blending,
-            depth: image.depth,
-        })
+        Ok(placed(step, chain, None, layer, base))
     }
 
     /// A particle system's layer: its sprite texture through our particle program.
@@ -168,18 +175,7 @@ impl<'a> Builder<'a> {
         reserve(&mut self.allocated, super::swarm::Swarm::bytes(system))?;
         let seed = renderer.layers.len() as u64;
         let swarm = unsafe { super::swarm::Swarm::new(self.gl, system, seed)? };
-        let image = &layer.image;
-        Ok(Drawn {
-            step,
-            chain: None,
-            swarm: Some(swarm),
-            origin: [image.origin[0], image.origin[1]],
-            size: (image.scale[0], image.scale[1]),
-            angle: image.angles[2],
-            tint: [1.0; 4],
-            blending: layer.blending,
-            depth: image.depth,
-        })
+        Ok(placed(step, None, Some(swarm), layer, Base::Particles))
     }
 
     /// The layer's own step and its effect passes drawn into targets, and the step that places

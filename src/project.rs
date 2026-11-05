@@ -44,7 +44,11 @@ pub enum Blending {
 
 /// An image layer with what it takes to draw it.
 pub struct Layer {
+    /// Which of the scene's objects it is.
+    pub object: usize,
     pub image: Image,
+    /// What its material multiplies its brightness and alpha by.
+    pub shade: [f32; 2],
     pub texture: Arc<Texture>,
     pub secondary: Vec<TextureInput>,
     pub fragment: Option<Arc<crate::shader::Fragment>>,
@@ -69,6 +73,16 @@ pub struct TextureInput {
 pub struct Prepared {
     pub scene: Scene,
     pub layers: Vec<Layer>,
+    /// The project's property values, which the scene's scripts read.
+    user: serde_json::Map<String, Value>,
+}
+
+impl Prepared {
+    /// The scene's scripts, loaded afresh and run to their first frame, for one renderer to
+    /// run on; none when the scene has no scripts. They loaded when the scene was prepared.
+    pub fn stage(&self) -> Result<Option<crate::Stage>, Error> {
+        crate::Stage::new(&self.scene, &self.user)
+    }
 }
 
 #[derive(Clone)]
@@ -190,7 +204,8 @@ impl Project {
                 .chain(layer.effects.iter().map(|pass| &pass.fragment))
                 .any(|fragment| fragment.animated || fragment.reads.audio)
                 || layer.particles.is_some()
-        }) {
+        }) || !prepared.scene.scripts.is_empty()
+        {
             return Err(Error::Format(
                 "time-dependent materials need animated scene playback".into(),
             ));
@@ -211,9 +226,6 @@ impl Project {
 
     fn prepare_inner(&self, allow_parallax: bool) -> Result<Prepared, Error> {
         let root = self.json(&self.scene)?;
-        if scripted(&root) {
-            return Err(Error::Format("SceneScript needs another renderer".into()));
-        }
         let scene = Scene::from_value(&root)?;
         let mut missing = scene.missing();
         if !allow_parallax && scene.parallax.is_some() {
@@ -237,7 +249,23 @@ impl Project {
         if !allow_parallax && pointed {
             return Err(Error::Format(format!("needs {}", Missing::PointerParallax)));
         }
-        Ok(Prepared { scene, layers })
+        // Scripts that fail refuse the scene here, before a host replaces its wallpaper.
+        self.stage(&scene)?;
+        Ok(Prepared {
+            scene,
+            layers,
+            user: self.user(),
+        })
+    }
+
+    /// The scene's scripts, loaded with the project's property values and run to their first
+    /// frame; an error names the scripts that failed.
+    pub fn stage(&self, scene: &Scene) -> Result<Option<crate::Stage>, Error> {
+        crate::Stage::new(scene, &self.user())
+    }
+
+    fn user(&self) -> serde_json::Map<String, Value> {
+        self.values.clone().into_iter().collect()
     }
 
     /// The scene's image layers, each with its texture. A layer whose files are missing or
@@ -261,19 +289,22 @@ impl Project {
         let mut omitted = 0;
         let mut textures = material::Resources::default();
         let mut models = HashMap::new();
-        let shown: Vec<&Object> = scene
+        // Scripts may show a hidden layer, so a scripted scene keeps them all.
+        let scripted = !scene.scripts.is_empty();
+        let shown: Vec<(usize, &Object)> = scene
             .objects
             .iter()
-            .filter(|object| match object {
-                Object::Image(image) => image.visible,
-                Object::Particles(particles) => particles.visible,
+            .enumerate()
+            .filter(|(_, object)| match object {
+                Object::Image(image) => image.visible || scripted,
+                Object::Particles(particles) => particles.visible || scripted,
                 _ => false,
             })
             .collect();
         if shown.len() > 4096 {
             skipped.push("scene exceeds 4096 layers".into());
         }
-        for object in shown.into_iter().take(4096) {
+        for (at, object) in shown.into_iter().take(4096) {
             let (name, layer) = match object {
                 Object::Image(image) => (
                     &image.name,
@@ -286,7 +317,10 @@ impl Project {
                 _ => continue,
             };
             match layer {
-                Ok(layer) => layers.push(layer),
+                Ok(layer) => layers.push(Layer {
+                    object: at,
+                    ..layer
+                }),
                 Err(err) => {
                     if skipped.len() < 64 {
                         let name: String = name.chars().take(160).collect();
@@ -322,9 +356,7 @@ impl Project {
             .map_err(|reason| Error::Format(reason.clone()))?
             .clone();
         let effects = self.effects(image, textures, remaining, still)?;
-        let mut image = image.clone();
-        image.brightness *= resolved.shade[0];
-        image.alpha *= resolved.shade[1];
+        let image = image.clone();
         // A plain colour is as big as the layer says, which effects drawn over it need.
         let texture = match (resolved.solid, image.size) {
             (true, Some((width, height))) => {
@@ -333,7 +365,9 @@ impl Project {
             _ => Arc::clone(&resolved.texture),
         };
         Ok(Layer {
+            object: 0,
             image,
+            shade: resolved.shade,
             texture,
             secondary: resolved.secondary.clone(),
             fragment: resolved.fragment.clone(),

@@ -20,7 +20,8 @@ use glow::HasContext;
 
 use crate::Error;
 use crate::project::{Blending, Layer};
-use crate::scene::{Parallax, Scene};
+use crate::scene::{Parallax, Pose, Scene};
+use crate::script::{Moment, Stage};
 use crate::shader::Constant;
 
 /// How far a layer of depth 1 travels at the pointer's furthest, as a share of the scene,
@@ -87,6 +88,70 @@ struct Drawn {
     tint: [f32; 4],
     blending: Blending,
     depth: [f32; 2],
+    /// Which of the scene's objects it is, which scripts may move, show and hide.
+    object: usize,
+    base: Base,
+    visible: bool,
+}
+
+/// How a layer is placed from where its object is.
+#[derive(Clone, Copy)]
+enum Base {
+    /// `size` before scaling, `anchor` where its origin is on it, and what its material
+    /// multiplies its brightness and alpha by.
+    Picture {
+        size: (f32, f32),
+        anchor: [f32; 2],
+        shade: [f32; 2],
+    },
+    /// Covering the scene, whatever its object says.
+    Whole { scene: (f32, f32), shade: [f32; 2] },
+    /// A particle system: the object's origin and scale place and size it.
+    Particles,
+}
+
+impl Drawn {
+    fn pose(&mut self, pose: &Pose) {
+        self.visible = pose.visible;
+        self.angle = pose.angle;
+        let shaded = |shade: [f32; 2]| {
+            let light = pose.brightness * shade[0];
+            [
+                pose.color[0] * light,
+                pose.color[1] * light,
+                pose.color[2] * light,
+                pose.alpha * shade[1],
+            ]
+        };
+        match self.base {
+            Base::Picture {
+                size,
+                anchor,
+                shade,
+            } => {
+                let size = (size.0 * pose.scale[0], size.1 * pose.scale[1]);
+                // The origin is the anchor's place; the layer's centre is that far back from it.
+                let (sin, cos) = pose.angle.sin_cos();
+                let [ax, ay] = [anchor[0] * size.0, anchor[1] * size.1];
+                self.origin = [
+                    pose.origin[0] - (cos * ax - sin * ay),
+                    pose.origin[1] - (sin * ax + cos * ay),
+                ];
+                self.size = size;
+                self.tint = shaded(shade);
+            }
+            Base::Whole { scene, shade } => {
+                self.origin = [scene.0 / 2.0, scene.1 / 2.0];
+                self.size = scene;
+                self.tint = shaded(shade);
+            }
+            Base::Particles => {
+                self.origin = [pose.origin[0], pose.origin[1]];
+                self.size = (pose.scale[0], pose.scale[1]);
+                self.tint = [1.0; 4];
+            }
+        }
+    }
 }
 
 struct Program {
@@ -114,6 +179,9 @@ pub struct Renderer {
     /// Where the parallax has got to on its way to the pointer, -1..1 across the target.
     eye: [f32; 2],
     inputs: Box<material::Inputs>,
+    stage: Option<Box<Stage>>,
+    /// The size of the last target drawn to, which scripts see as the screen.
+    screen: std::cell::Cell<(u32, u32)>,
 }
 
 /// What a renderer's shaders read that only the host can give.
@@ -125,7 +193,8 @@ pub struct Needs {
 }
 
 impl Renderer {
-    /// Uploads textures and builds the material programs. Hidden layers are left out.
+    /// Uploads textures and builds the material programs. Hidden layers are kept, for scripts
+    /// to show, but not drawn.
     ///
     /// # Safety
     /// `gl` has to be current on this thread.
@@ -141,6 +210,8 @@ impl Renderer {
             parallax: scene.parallax,
             eye: [0.0; 2],
             inputs: Box::default(),
+            stage: None,
+            screen: std::cell::Cell::new((scene.size.0 as u32, scene.size.1 as u32)),
         };
         let mut builder = build::Builder::new(gl);
         // Making effect targets binds framebuffers; the host gets its own back.
@@ -149,7 +220,7 @@ impl Renderer {
             if layers.len() > 4096 {
                 return Err(Error::Format("renderer exceeds 4096 layers".into()));
             }
-            for layer in layers.iter().filter(|layer| layer.image.visible) {
+            for layer in layers {
                 let drawn = unsafe { builder.layer(&mut renderer, scene, layer)? };
                 renderer.layers.push(drawn);
             }
@@ -174,9 +245,36 @@ impl Renderer {
         self.textures.len()
     }
 
-    /// Whether an active GPU program or a particle system needs time or frame delta updates.
+    /// Runs the scene's scripts from here on, each `animate`.
+    pub fn script(&mut self, stage: Stage) {
+        self.stage = Some(Box::new(stage));
+    }
+
+    /// Runs a frame of the scene's scripts, at the host's scene time, and moves, shows and
+    /// hides layers the way they say. Hosts call it before each `draw_timed`.
+    pub fn animate(&mut self, time: f32, delta: f32) {
+        let Some(stage) = self.stage.as_mut() else {
+            return;
+        };
+        let poses: &[Pose] = stage.tick(Moment {
+            time: f64::from(time),
+            delta,
+            daytime: self.inputs.daytime,
+            screen: self.screen.get(),
+            spectrum: Some(&self.inputs.spectrum),
+        });
+        for layer in &mut self.layers {
+            if let Some(pose) = poses.get(layer.object) {
+                layer.pose(pose);
+            }
+        }
+    }
+
+    /// Whether an active GPU program, a particle system or a script needs time or frame delta
+    /// updates.
     pub fn animated(&self) -> bool {
-        self.layers.iter().any(|layer| layer.swarm.is_some())
+        self.stage.is_some()
+            || self.layers.iter().any(|layer| layer.swarm.is_some())
             || self.programs.iter().any(|program| {
                 program
                     .frame
@@ -227,10 +325,14 @@ impl Renderer {
                 .iter()
                 .filter_map(|program| program.frame.as_ref())
         };
+        let (daytime, audio) = self
+            .stage
+            .as_ref()
+            .map_or((false, false), |stage| stage.needs());
         Needs {
             pointer: self.parallax.is_some() || frames().any(material::Frame::points),
-            daytime: frames().any(|frame| frame.daytime.is_some()),
-            audio: frames().any(material::Frame::listens),
+            daytime: daytime || frames().any(|frame| frame.daytime.is_some()),
+            audio: audio || frames().any(material::Frame::listens),
         }
     }
 
@@ -269,6 +371,7 @@ impl Renderer {
                 -self.eye[1] * reach * self.size.1,
             ]
         });
+        self.screen.set(target);
         unsafe {
             let host = state::Host::save(gl);
             gl.disable(glow::DEPTH_TEST);
@@ -277,8 +380,10 @@ impl Renderer {
             gl.disable(glow::STENCIL_TEST);
             gl.color_mask(true, true, true, true);
             gl.blend_equation(glow::FUNC_ADD);
-            for chain in self.layers.iter().filter_map(|layer| layer.chain.as_ref()) {
-                chain.run(gl, &self.programs, target, time, delta, &self.inputs);
+            for layer in self.layers.iter().filter(|layer| layer.visible) {
+                if let Some(chain) = &layer.chain {
+                    chain.run(gl, &self.programs, target, time, delta, &self.inputs);
+                }
             }
             host.bind(gl);
             gl.viewport(0, 0, target.0 as i32, target.1 as i32);
@@ -296,7 +401,7 @@ impl Renderer {
             // Layer alpha blends RGB over the scene background; the final scene is opaque.
             gl.color_mask(true, true, true, false);
             let mut current_program = None;
-            for layer in &self.layers {
+            for layer in self.layers.iter().filter(|layer| layer.visible) {
                 let program = &self.programs[layer.step.program];
                 if current_program != Some(layer.step.program) {
                     gl.use_program(Some(program.id));

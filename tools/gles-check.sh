@@ -19,7 +19,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 cargo build --quiet --example view --manifest-path "$root/Cargo.toml"
 view=${CARGO_TARGET_DIR:-$root/target}/debug/examples/view
-projects=(demo fragment mask wave vertex effect values particle inputs dialect)
+projects=(demo fragment mask wave vertex effect values particle inputs script dialect)
 python3 "$root/tools/demo-scene.py" "$work/demo" > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/fragment" --fragment-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/mask" --mask-demo > /dev/null
@@ -29,6 +29,7 @@ python3 "$root/tools/demo-scene.py" "$work/effect" --effect-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/inputs" --inputs-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/script" --script-demo > /dev/null
 # Wallpaper Engine's dialect: lerp, fmod (truncating, so this one comes out black), mul, and a
 # helper with out parameters, on a red clear colour that shows if the material is refused.
 mkdir -p "$work/dialect/shaders" "$work/dialect/materials"
@@ -89,6 +90,6 @@ for project in "${projects[@]}"; do
     echo "$project: first pixel $pixel"
 done
 # Hashes differ between drivers, but these demos have to draw what the plain one does on each.
-for project in vertex effect inputs; do
+for project in vertex effect inputs script; do
     cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done

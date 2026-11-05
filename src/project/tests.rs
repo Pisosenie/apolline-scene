@@ -417,11 +417,76 @@ fn repeated_layers_share_pixels_and_hidden_layers_need_no_files() {
     assert_eq!(project.prepare_still().unwrap().layers.len(), 1);
     for feature in [
         r#"{"particle":"rain.json"}"#,
-        r#"{"image":"model.json","origin":{"script":"x","value":"0 0 0"}}"#,
+        r#"{"image":"model.json","origin":{"script":"export function update(value) { return value; }","value":"0 0 0"}}"#,
     ] {
         std::fs::write(folder.join("scene.json"), format!(r#"{{"general":{{"orthogonalprojection":{{"width":100,"height":100}}}},"objects":[{feature}]}}"#)).unwrap();
         assert!(project.prepare_still().is_err());
     }
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
+fn a_scripted_scene_keeps_hidden_layers_for_its_scripts_to_show() {
+    let folder = folder("scripted");
+    std::fs::write(
+        folder.join("project.json"),
+        r#"{"general":{"properties":{"speed":{"type":"slider","min":0,"max":5,"value":2}}}}"#,
+    )
+    .unwrap();
+    std::fs::create_dir(folder.join("materials")).unwrap();
+    std::fs::write(folder.join("model.json"), r#"{"material":"material.json"}"#).unwrap();
+    std::fs::write(
+        folder.join("material.json"),
+        r#"{"passes":[{"textures":["one"]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(folder.join("materials/one.tex"), texture(4, 4)).unwrap();
+    let show = serde_json::to_string(
+        "export function update(value) { thisScene.getLayer('hidden').visible = true; return engine.userProperties.speed; }",
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("scene.json"),
+        format!(
+            r#"{{"general":{{"orthogonalprojection":{{"width":100,"height":100}}}},"objects":[
+                {{"name":"shown","image":"model.json","alpha":{{"script":{show},"value":1}}}},
+                {{"name":"hidden","image":"model.json","visible":false}}]}}"#
+        ),
+    )
+    .unwrap();
+    let project = Project::open(&folder, None).unwrap();
+    let prepared = project.prepare().unwrap();
+    assert_eq!(
+        prepared
+            .layers
+            .iter()
+            .map(|layer| layer.object)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    let mut stage = prepared.stage().unwrap().unwrap();
+    let poses = stage.tick(crate::Moment {
+        time: 0.1,
+        delta: 0.1,
+        daytime: 0.0,
+        screen: (100, 100),
+        spectrum: None,
+    });
+    assert_eq!((poses[0].alpha, poses[1].visible), (2.0, true));
+    let broken = serde_json::to_string(
+        "export function update(value) { return thisLayer.getAnimation().frame; }",
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("scene.json"),
+        format!(r#"{{"general":{{"orthogonalprojection":{{"width":100,"height":100}}}},"objects":[{{"name":"puppet","image":"model.json","alpha":{{"script":{broken},"value":1}}}}]}}"#),
+    )
+    .unwrap();
+    let error = project.prepare().err().unwrap().to_string();
+    assert!(
+        error.contains("puppet's alpha") && error.contains("getAnimation"),
+        "{error}"
+    );
     std::fs::remove_dir_all(folder).unwrap();
 }
 

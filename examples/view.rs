@@ -163,15 +163,20 @@ impl View {
                 .set_properties(&values)
                 .map_err(|err| err.to_string())?;
         }
-        let (scene, layers, skipped) = if self.shot.is_some() && !self.partial {
+        let (scene, layers, stage, skipped) = if self.shot.is_some() && !self.partial {
             let prepared = project
                 .prepare_snapshot()
                 .map_err(|error| error.to_string())?;
-            (prepared.scene, prepared.layers, Vec::new())
+            let stage = prepared.stage().map_err(|error| error.to_string())?;
+            (prepared.scene, prepared.layers, stage, Vec::new())
         } else {
             let scene = project.scene().map_err(|error| error.to_string())?;
             let (layers, skipped) = project.layers(&scene);
-            (scene, layers, skipped)
+            let stage = project.stage(&scene).unwrap_or_else(|error| {
+                eprintln!("view: scripts not run: {error}");
+                None
+            });
+            (scene, layers, stage, skipped)
         };
         for layer in &skipped {
             eprintln!("view: left out {layer}");
@@ -239,8 +244,11 @@ impl View {
         let gl = unsafe {
             glow::Context::from_loader_function_cstr(|name| display.get_proc_address(name))
         };
-        let renderer =
+        let mut renderer =
             unsafe { Renderer::new(&gl, &scene, &layers) }.map_err(|err| err.to_string())?;
+        if let Some(stage) = stage {
+            renderer.script(stage);
+        }
         if self.stats {
             eprintln!(
                 "view: {} texture uploads, {} logical texture bytes, animated={}",
@@ -266,11 +274,11 @@ impl ApplicationHandler for View {
             return;
         }
         match self.open(event_loop) {
-            Ok(open) if self.shot.is_some() => {
+            Ok(mut open) if self.shot.is_some() => {
                 let saved = self
                     .shot
                     .as_deref()
-                    .map(|path| shoot(&open, path, self.shot_size, self.shot_time));
+                    .map(|path| shoot(&mut open, path, self.shot_size, self.shot_time));
                 if let Some(Err(err)) = saved {
                     eprintln!("view: {err}");
                     self.failed = true;
@@ -315,12 +323,14 @@ impl ApplicationHandler for View {
                 self.last = now;
                 let moving = open.renderer.follow(self.pointer, seconds);
                 let size = open.window.inner_size();
+                let time = open.started.elapsed().as_secs_f32();
+                open.renderer.animate(time, seconds.min(0.25));
                 unsafe {
                     open.renderer.draw_timed(
                         &open.gl,
                         (size.width, size.height),
                         apolline_scene::render::Fit::Cover,
-                        open.started.elapsed().as_secs_f32(),
+                        time,
                         seconds.min(0.25),
                     )
                 };
@@ -350,8 +360,19 @@ fn shot_size(value: &str) -> Option<(u32, u32)> {
 }
 
 /// One frame drawn into an offscreen framebuffer and saved as a PNG, whatever the window.
-fn shoot(open: &Open, path: &std::path::Path, (w, h): (u32, u32), time: f32) -> Result<(), String> {
+fn shoot(
+    open: &mut Open,
+    path: &std::path::Path,
+    (w, h): (u32, u32),
+    time: f32,
+) -> Result<(), String> {
     use glow::HasContext;
+    // Scripts play up to the moment the way they would have, a frame at a time.
+    let frames = (time * 30.0).ceil().clamp(1.0, 1800.0) as u32;
+    for frame in 1..=frames {
+        let at = time * frame as f32 / frames as f32;
+        open.renderer.animate(at, time / frames as f32);
+    }
     let gl = &open.gl;
     let mut pixels = vec![0u8; w as usize * h as usize * 4];
     unsafe {

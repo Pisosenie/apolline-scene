@@ -12,6 +12,7 @@ glow = "0.16"
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tga"] }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-decode"] }
+rquickjs = { version = "0.14", features = ["loader"] }
 
 [dev-dependencies]
 glutin = "0.32"

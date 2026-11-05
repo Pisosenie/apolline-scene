@@ -16,6 +16,7 @@ demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and 
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
+demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
 demos.add_argument("--inputs-demo", action="store_true", help="read the pointer, parallax, daytime and audio at their resting values, which leave the sky as it is")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
@@ -209,6 +210,24 @@ if args.particle_demo:
             r = math.hypot(x - 7.5, y - 7.5) / 8
             dot += bytes([255, 255, 255, max(0, min(255, int((1 - r) * 255)))])
     files["materials/particle/dot.tex"] = tex(0, 16, 16, bytes(dot))
+if args.script_demo:
+    # Scripts undo what's wrong: a group puts the brick in place and shows it, and the glow's
+    # alpha comes from a script property through WEMath.
+    scene = json.loads(files["scene.json"])
+    place = """export function update(value) {
+    thisScene.getLayer('brick').visible = true;
+    return new Vec3(960, 150, 0);
+}"""
+    dim = """import * as WEMath from 'WEMath';
+export var scriptProperties = createScriptProperties().addSlider({ name: 'level', value: 0.3 }).finish();
+export function update(value) {
+    return WEMath.clamp(scriptProperties.level, 0, 1);
+}"""
+    glow, brick = scene["objects"][2], scene["objects"][3]
+    glow["alpha"] = {"script": dim, "scriptproperties": {"level": 0.8}, "value": 0.1}
+    brick.update({"id": 2, "parent": 1, "origin": "0 0 0", "visible": False})
+    scene["objects"].insert(0, {"id": 1, "name": "stand", "origin": {"script": place, "value": "0 0 0"}})
+    files["scene.json"] = json.dumps(scene).encode()
 if args.inputs_demo:
     files["materials/sky.json"] = b'{"passes": [{"shader": "demo/inputs", "textures": ["sky"], "blending": "normal"}]}'
     files["shaders/demo/inputs.frag"] = b"""varying vec2 v_TexCoord;

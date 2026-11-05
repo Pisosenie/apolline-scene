@@ -5,9 +5,8 @@ How the host-facing pieces behave in detail. `docs/PLAN.md` has the stages and t
 ## Hosting still scenes
 
 `Project::prepare_still()` returns a complete still scene or a reason to use another renderer.
-`Project::prepare()` also accepts time-driven materials while still rejecting animated texture
-frames, scripts, effect chains and pointer parallax.
-It refuses effects, scripts, particles, animated textures, pointer parallax, 3D and unsupported
+`Project::prepare()` also accepts time-driven materials, effects, particles and scripts on
+objects, while rejecting animated texture frames, pointer parallax, 3D and unsupported
 materials. `Renderer::draw_fitted` supports cover and contain; `draw` keeps its cover default.
 Repeated layers share decoded pixels through `Arc<Texture>` and one GPU upload per renderer.
 Hidden layers load no resources. Decoded textures are limited to 256 MiB across frames and
@@ -18,6 +17,16 @@ A scene may retain at most 512 MiB of distinct decoded textures and 4096 image l
 Shared textures count once. Packages are capped at 512 MiB, individual resources at 256 MiB
 and JSON files at 8 MiB. Readers reject non-regular files and bound reads even if a file grows.
 These are separate allocation limits, not a guarantee that total process RSS stays below 512 MiB.
+
+## Scripts
+
+`Prepared::stage()` loads the scene's scripts afresh for one renderer, which runs them through
+`Renderer::script(stage)`; the host calls `Renderer::animate(time, delta)` before each
+`draw_timed`, and `Renderer::needs` includes the time of day and audio when scripts read them.
+Scripts that fail to load or throw in their first frame refuse the scene in `prepare`. Each
+renderer has its own QuickJS runtime with a 64 MiB heap, a 1 MiB stack and 50 ms a frame; a
+script cut short or throwing later stops, the rest go on. Scenes with scripts keep hidden
+layers loaded, since a script may show them. `prepare_still` refuses them.
 
 ## User properties
 
@@ -172,8 +181,8 @@ request animation. `prepare_still` refuses time declarations rather than freezin
 
 Apolline-wall keeps a native renderer only for active time uniforms and uses its existing
 shader clock, FPS/quality limits, frame callbacks, pauses and crossfades. Other scenes are
-flattened once. This adds fragment animation with static source textures; particles, effect
-chains, custom vertices, sprite-sheet animation and SceneScript remain unsupported.
+flattened once. This adds fragment animation with static source textures; sprite-sheet
+animation remains unsupported.
 
 ```sh
 python3 tools/demo-scene.py wave --still --wave-demo
@@ -202,8 +211,9 @@ The file reader caps Vec capacity while reading a growing file, and probes only 
 byte to detect overflow. These are read/allocation limits, not a process memory sandbox.
 
 
-The viewer's --shot uses Project::prepare_snapshot: scripts, texture animation and unsupported
-3D layer transforms are refused before rendering. Unlike native desktop preparation, snapshots
+The viewer's --shot uses Project::prepare_snapshot: texture animation and unsupported
+3D layer transforms are refused before rendering; scripts play up to `--time` at 30 frames a
+second. Unlike native desktop preparation, snapshots
 allow pointer parallax at a neutral eye. This keeps default synthetic parallax fixtures usable
 without silently flattening unsupported animation into a reference frame.
 

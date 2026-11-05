@@ -9,13 +9,15 @@ pub mod project;
 pub mod properties;
 pub mod render;
 pub mod scene;
+pub mod script;
 pub mod shader;
 pub mod tex;
 mod value;
 
 pub use project::{Blending, Layer, Prepared, Project, TextureInput};
 pub use render::Renderer;
-pub use scene::{Missing, Scene};
+pub use scene::{Missing, Pose, Scene};
+pub use script::{Moment, Stage};
 
 use std::fmt;
 

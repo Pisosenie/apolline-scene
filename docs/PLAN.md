@@ -46,7 +46,10 @@ A scene that uses something not done yet goes on falling back to `linux-wallpape
 2026-11-06 with `tools/survey-set.py` and `examples/survey.rs`. Eight draw natively whole and
 match their authors' previews. What holds the rest, by scenes:
 
-- SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers.
+- SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers. Scripts
+  on objects' place and look run now (below); what keeps those scenes out is mostly their
+  text layers, scripted effect values and particle overrides, and in four scenes
+  `thisScene.createLayer`/`destroyLayer` and `getTransformMatrix`.
 - Particle system `flags`, 31, and child systems, sprite sheets, ropes and trails, 10 each.
 - Render targets (`_rt_FullFrameBuffer` and friends), 23: blend modes, composition layers.
 - Text layers, 29 (`unknown-object`). Groups, `parent` links and solid colour layers are
@@ -98,8 +101,21 @@ than a lossless fallback.
 documentation names them, seeded), then parsing once the survey gives the JSON keys, then
 one instanced draw per system; control points, children, trails and audio after.
 
-**E. Timeline animations**, **F. text layers and SceneScript** (QuickJS with memory and time
-limits), **G. puppet warp**: each once its storage is known from real files. 3D scenes,
+**F. SceneScript**, done for objects: each `{script, scriptproperties, value}` on an image,
+particle system or group's `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or
+`visible` is an ES module run in QuickJS (64 MiB, 50 ms a frame). `update(value)` returns the
+new value; `thisLayer`, `thisScene.getLayer`, `engine` (clock, time of day, canvas, timers,
+audio buffers, user properties), `shared`, `localStorage`, `input` (the cursor at rest),
+`createScriptProperties`, `Vec2/3/4` and `WEMath`/`WEColor`/`WEVector` are written here from the
+documented API. Angles are degrees to scripts. Each frame the objects' own values are read
+back and composed through their parents, so a scripted group carries its children, and
+hidden layers stay loaded for scripts to show. Cursor and media events never come. A script
+that throws or asks for what isn't here refuses the scene with the member it asked for; one
+that throws later just stops. Next: scripted effect values and particle overrides (uniforms
+and emitter rates per frame), `getTransformMatrix`, then text layers.
+
+**E. Timeline animations**, **text layers**, **G. puppet warp**: each once its storage is known
+from real files. 3D scenes,
 lights and models are not planned.
 
 **Measured.** With real files: the corpus of the 200 most subscribed scenes, each shot

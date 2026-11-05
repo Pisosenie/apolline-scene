@@ -119,7 +119,8 @@ impl Survey {
             for missing in scene.missing() {
                 reasons.insert(match &missing {
                     apolline_scene::Missing::UnknownKey(path)
-                    | apolline_scene::Missing::Animated(path) => {
+                    | apolline_scene::Missing::Animated(path)
+                    | apolline_scene::Missing::Scripted(path) => {
                         format!("{}:{}", missing.code(), unindexed(path))
                     }
                     apolline_scene::Missing::Setting(what) => format!("setting:{what}"),
@@ -137,6 +138,18 @@ impl Survey {
                     counts.1 += 1;
                 }
                 reasons.insert(reason);
+            }
+            // Every script, whatever else the scene needs, so what scripts lack shows too.
+            if let Err(error) = opened.stage(&scene) {
+                for failure in error.to_string().split("; ") {
+                    let reason = format!("script:{}", script_class(failure));
+                    let counts = self.layers.entry(reason.clone()).or_default();
+                    counts.0 += 1;
+                    if seen.insert(reason.clone()) {
+                        counts.1 += 1;
+                    }
+                    reasons.insert(reason);
+                }
             }
         }
         match opened.prepare() {
@@ -506,6 +519,24 @@ fn layer_class(message: &str) -> String {
         .collect();
     let joined: String = words.join("_").chars().take(64).collect();
     vocabulary(&joined)
+}
+
+/// A failed script as what it asked for that isn't here, or what went wrong, without the
+/// layer's name.
+fn script_class(failure: &str) -> String {
+    if let Some((_, asked)) = failure.split_once("(it asked for ") {
+        let members: Vec<&str> = asked.trim_end_matches(')').split(", ").take(3).collect();
+        return vocabulary(&members.join("+").chars().take(64).collect::<String>());
+    }
+    let reason = failure.rsplit("': ").next().unwrap_or(failure);
+    let reason = reason.split_once(": ").map_or(reason, |(_, rest)| rest);
+    let words: Vec<String> = reason
+        .split_whitespace()
+        .map(|word| word.chars().filter(char::is_ascii_alphanumeric).collect())
+        .filter(|word: &String| !word.is_empty())
+        .take(6)
+        .collect();
+    vocabulary(&words.join("_").chars().take(64).collect::<String>())
 }
 
 /// An error's first words, without paths or names. Layer errors come as `name: reason; …`,

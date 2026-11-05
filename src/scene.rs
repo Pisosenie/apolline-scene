@@ -19,8 +19,63 @@ pub struct Scene {
     pub clear: [f32; 3],
     pub parallax: Option<Parallax>,
     pub objects: Vec<Object>,
+    /// Scripts on objects' places and looks, in the order they run.
+    pub scripts: Vec<Script>,
+    /// Each object's own place and look, before its parents move it, and what it hangs from.
+    pub(crate) locals: Vec<Local>,
+    pub(crate) tree: Vec<Node>,
+    /// Every object's name, drawn or not, which scripts find layers by.
+    pub(crate) names: Vec<String>,
     /// What in it isn't understood: keys, settings and changing values, read once.
     refused: Vec<Missing>,
+}
+
+/// A SceneScript module on one of an object's values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Script {
+    pub object: usize,
+    /// `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or `visible`.
+    pub property: &'static str,
+    pub source: String,
+    /// The scene's values for the script's own properties, by name.
+    pub properties: serde_json::Map<String, Value>,
+}
+
+/// The object values a script can be on.
+pub(crate) const SCRIPTABLE: &[&str] = &[
+    "origin",
+    "scale",
+    "angles",
+    "color",
+    "alpha",
+    "brightness",
+    "visible",
+];
+
+/// An object's own place and look.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Local {
+    pub origin: [f32; 3],
+    pub scale: [f32; 3],
+    /// In radians.
+    pub angles: [f32; 3],
+    pub color: [f32; 3],
+    pub alpha: f32,
+    pub brightness: f32,
+    pub visible: bool,
+}
+
+/// Where an object ends up once its parents have moved it, and how it looks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    pub origin: [f32; 3],
+    pub scale: [f32; 3],
+    /// In radians, in the scene's plane.
+    pub angle: f32,
+    pub color: [f32; 3],
+    pub alpha: f32,
+    pub brightness: f32,
+    pub visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,6 +118,21 @@ pub struct Image {
     pub depth: [f32; 2],
     /// The effects on it that are shown, as the scene gives them, in drawing order.
     pub effects: Vec<Value>,
+}
+
+impl Image {
+    /// Where it is and how it looks, as the scene places it.
+    pub fn pose(&self) -> Pose {
+        Pose {
+            origin: self.origin,
+            scale: self.scale,
+            angle: self.angles[2],
+            color: self.color,
+            alpha: self.alpha,
+            brightness: self.brightness,
+            visible: self.visible,
+        }
+    }
 }
 
 /// A particle system placed in the scene.
@@ -111,13 +181,23 @@ impl Scene {
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let objects = hang(raw, raw.iter().map(object).collect());
+        let objects: Vec<Object> = raw.iter().map(object).collect();
+        let locals: Vec<Local> = raw.iter().map(local).collect();
+        let tree = tree(raw);
+        let objects = hang(objects, &pose(&locals, &tree));
         Ok(Scene {
             size: size.unwrap_or(DEFAULT_SIZE),
             perspective: size.is_none(),
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
+            scripts: scripts(raw, &objects),
             objects,
+            locals,
+            tree,
+            names: raw
+                .iter()
+                .map(|value| text(value.get("name")).unwrap_or_default().to_owned())
+                .collect(),
             refused: check::refusals(root),
         })
     }
@@ -218,86 +298,140 @@ fn object(value: &Value) -> Object {
     Object::Other
 }
 
-/// Where an object sits on its own, before its parents move it.
-struct Node {
-    id: Option<i64>,
-    parent: Option<i64>,
-    origin: [f32; 3],
-    scale: [f32; 3],
-    angle: f32,
-    visible: bool,
-    /// Whether its parents' visibility reaches it.
-    inherits: bool,
-}
-
-fn node(value: &Value) -> Node {
+fn local(value: &Value) -> Local {
     let field = |name: &str| value.get(name);
-    let id = |name: &str| field(name).and_then(Value::as_i64);
-    Node {
-        id: id("id"),
-        parent: id("parent"),
+    Local {
         origin: vector(field("origin"), [0.0; 3]),
         scale: vector(field("scale"), [1.0; 3]),
-        angle: vector(field("angles"), [0.0; 3])[2],
+        angles: vector(field("angles"), [0.0; 3]),
+        color: vector(field("color"), [1.0; 3]),
+        alpha: number(field("alpha")).unwrap_or(1.0),
+        brightness: number(field("brightness")).unwrap_or(1.0),
         visible: flag(field("visible")).unwrap_or(true),
-        inherits: !flag(field("disablepropagation")).unwrap_or(false),
     }
+}
+
+/// What an object hangs from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Node {
+    pub parent: Option<usize>,
+    /// Whether its parents' visibility reaches it.
+    pub inherits: bool,
+}
+
+fn tree(raw: &[Value]) -> Vec<Node> {
+    let id = |value: &Value, name: &str| value.get(name).and_then(Value::as_i64);
+    let index: std::collections::HashMap<i64, usize> = raw
+        .iter()
+        .enumerate()
+        .filter_map(|(at, value)| Some((id(value, "id")?, at)))
+        .collect();
+    raw.iter()
+        .map(|value| Node {
+            parent: id(value, "parent").and_then(|parent| index.get(&parent).copied()),
+            inherits: !flag(value.get("disablepropagation")).unwrap_or(false),
+        })
+        .collect()
 }
 
 /// Places each object inside its parents: a child's origin is in its parent's units, turned
 /// and scaled with it, and a hidden parent hides it too.
-fn hang(raw: &[Value], mut objects: Vec<Object>) -> Vec<Object> {
-    let nodes: Vec<Node> = raw.iter().map(node).collect();
-    let index: std::collections::HashMap<i64, usize> = nodes
+pub(crate) fn pose(locals: &[Local], tree: &[Node]) -> Vec<Pose> {
+    locals
         .iter()
-        .enumerate()
-        .filter_map(|(at, node)| Some((node.id?, at)))
-        .collect();
-    for (at, object) in objects.iter_mut().enumerate() {
-        let mut origin = nodes[at].origin;
-        let mut scale = nodes[at].scale;
-        let mut angle = 0.0;
-        let mut visible = true;
-        let mut inherits = nodes[at].inherits;
-        let mut parent = nodes[at].parent;
-        // A bounded walk, so a loop of parents ends.
-        for _ in 0..32 {
-            let Some(&up) = parent.and_then(|id| index.get(&id)) else {
-                break;
-            };
-            let above = &nodes[up];
-            let (sin, cos) = above.angle.sin_cos();
-            let local = [origin[0] * above.scale[0], origin[1] * above.scale[1]];
-            origin = [
-                above.origin[0] + cos * local[0] - sin * local[1],
-                above.origin[1] + sin * local[0] + cos * local[1],
-                above.origin[2] + origin[2] * above.scale[2],
-            ];
-            scale = [0, 1, 2].map(|axis| scale[axis] * above.scale[axis]);
-            angle += above.angle;
-            if inherits {
-                visible &= above.visible;
+        .zip(tree)
+        .map(|(own, node)| {
+            let mut origin = own.origin;
+            let mut scale = own.scale;
+            let mut angle = own.angles[2];
+            let mut visible = own.visible;
+            let mut inherits = node.inherits;
+            let mut parent = node.parent;
+            // A bounded walk, so a loop of parents ends.
+            for _ in 0..32 {
+                let Some(up) = parent.filter(|&up| up < locals.len()) else {
+                    break;
+                };
+                let above = &locals[up];
+                let (sin, cos) = above.angles[2].sin_cos();
+                let local = [origin[0] * above.scale[0], origin[1] * above.scale[1]];
+                origin = [
+                    above.origin[0] + cos * local[0] - sin * local[1],
+                    above.origin[1] + sin * local[0] + cos * local[1],
+                    above.origin[2] + origin[2] * above.scale[2],
+                ];
+                scale = [0, 1, 2].map(|axis| scale[axis] * above.scale[axis]);
+                angle += above.angles[2];
+                if inherits {
+                    visible &= above.visible;
+                }
+                inherits &= tree[up].inherits;
+                parent = tree[up].parent;
             }
-            inherits &= above.inherits;
-            parent = above.parent;
-        }
+            Pose {
+                origin,
+                scale,
+                angle,
+                color: own.color,
+                alpha: own.alpha,
+                brightness: own.brightness,
+                visible,
+            }
+        })
+        .collect()
+}
+
+fn hang(mut objects: Vec<Object>, poses: &[Pose]) -> Vec<Object> {
+    for (object, pose) in objects.iter_mut().zip(poses) {
         match object {
             Object::Image(image) => {
-                image.origin = origin;
-                image.scale = scale;
-                image.angles[2] += angle;
-                image.visible &= visible;
+                image.origin = pose.origin;
+                image.scale = pose.scale;
+                image.angles[2] = pose.angle;
+                image.visible = pose.visible;
             }
             Object::Particles(particles) => {
-                particles.origin = origin;
-                particles.scale = scale;
-                particles.angles[2] += angle;
-                particles.visible &= visible;
+                particles.origin = pose.origin;
+                particles.scale = pose.scale;
+                particles.angles[2] = pose.angle;
+                particles.visible = pose.visible;
             }
             _ => {}
         }
     }
     objects
+}
+
+/// The scripts on drawn objects' values. Scripts anywhere else are refused by the checks.
+fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
+    let mut found = Vec::new();
+    for (at, (value, object)) in raw.iter().zip(objects).enumerate() {
+        if !matches!(
+            object,
+            Object::Image(_) | Object::Particles(_) | Object::Group
+        ) {
+            continue;
+        }
+        for &property in SCRIPTABLE {
+            let Some(fields) = value.get(property).and_then(Value::as_object) else {
+                continue;
+            };
+            let Some(source) = fields.get("script").and_then(Value::as_str) else {
+                continue;
+            };
+            found.push(Script {
+                object: at,
+                property,
+                source: source.to_owned(),
+                properties: fields
+                    .get("scriptproperties")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default(),
+            });
+        }
+    }
+    found
 }
 
 /// `topleft` and the rest as the point on the layer they name.
