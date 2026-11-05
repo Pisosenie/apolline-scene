@@ -12,6 +12,7 @@ demos.add_argument("--fragment-demo", action="store_true", help="apply a synthet
 demos.add_argument("--mask-demo", action="store_true", help="apply a synthetic two-texture opacity mask")
 parser.add_argument("--mask-format", choices=("r", "rg", "rgba"), default="r", help="opacity-mask storage (default: R8)")
 demos.add_argument("--wave-demo", action="store_true", help="apply a synthetic native animated wave material")
+demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and sun through pass-through materials with their own vertex shaders")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
 if args.without_mask and not args.mask_demo:
@@ -107,6 +108,28 @@ void main() {
     uv.y = clamp(uv.y + sin(uv.x * 12.0 - g_Time * u_Speed) * u_Strength, 0.0, 1.0);
 #endif
     gl_FragColor = texSample2D(g_Texture0, uv);
+}
+'''
+if args.vertex_demo:
+    # Pass-through materials with their own vertex shaders draw what the plain layers draw.
+    files["materials/sky.json"] = b'{"passes": [{"shader": "demo/through", "textures": ["sky"], "blending": "normal"}]}'
+    files["materials/sun.json"] = b'{"passes": [{"shader": "demo/through", "textures": ["sun"], "blending": "translucent"}]}'
+    files["shaders/demo/through.vert"] = b'''attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+uniform mat4 g_ModelViewProjectionMatrix;
+varying vec4 v_TexCoord;
+varying float v_Keep;
+void main() {
+    gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+    v_TexCoord = vec4(a_TexCoord * 2.0, a_TexCoord);
+    v_Keep = 1.0;
+}
+'''
+    files["shaders/demo/through.frag"] = b'''varying vec4 v_TexCoord;
+varying float v_Keep;
+uniform sampler2D g_Texture0;
+void main() {
+    gl_FragColor = texSample2D(g_Texture0, v_TexCoord.zw) * v_Keep;
 }
 '''
 def string(t): t = t.encode(); return struct.pack("<I", len(t)) + t

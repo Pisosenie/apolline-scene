@@ -6,26 +6,10 @@ use glow::HasContext;
 /// # Safety
 /// The GL context must be current on this thread.
 pub(super) unsafe fn program(gl: &glow::Context, fragment: &Fragment) -> Result<Program, Error> {
-    let varying = match fragment.texcoord {
-        2 => "uv",
-        3 => "vec3(uv, 0.0)",
-        _ => "vec4(uv, 0.0, 0.0)",
+    let vertex = match &fragment.vertex {
+        Some(vertex) => vertex.clone(),
+        None => stand_in(fragment.texcoord),
     };
-    let vertex = format!(
-        "\
-uniform vec3 row0;
-uniform vec3 row1;
-uniform vec2 uv_max;
-out vec{} v_TexCoord;
-void main() {{
-    vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
-    vec3 local = vec3(corner - 0.5, 1.0);
-    gl_Position = vec4(dot(row0, local), dot(row1, local), 0.0, 1.0);
-    vec2 uv = vec2(corner.x, 1.0 - corner.y) * uv_max;
-    v_TexCoord = {varying};
-}}",
-        fragment.texcoord
-    );
     unsafe {
         let id = super::compile::link(gl, &vertex, &fragment.source).map_err(|error| {
             Error::Format(format!("{error} (source IDs: {:?})", fragment.files))
@@ -50,7 +34,11 @@ void main() {{
             vao,
             row0: gl.get_uniform_location(id, "row0"),
             row1: gl.get_uniform_location(id, "row1"),
-            uv_max: gl.get_uniform_location(id, "uv_max"),
+            uv_max: gl
+                .get_uniform_location(id, "uv_max")
+                .or_else(|| gl.get_uniform_location(id, "apolline_uv_max")),
+            mvp: gl.get_uniform_location(id, "g_ModelViewProjectionMatrix"),
+            layer_size: gl.get_uniform_location(id, "apolline_layer_size"),
             tint: gl.get_uniform_location(id, "apolline_layer_tint"),
             channels: None,
             frame: Some(Frame::new(gl, id)),
@@ -59,6 +47,55 @@ void main() {{
             }),
         })
     }
+}
+
+/// Our vertex shader, for a material that has none: the layer's quad, with the texture
+/// coordinates in as many components as the fragment declares.
+fn stand_in(texcoord: u8) -> String {
+    let varying = match texcoord {
+        2 => "uv",
+        3 => "vec3(uv, 0.0)",
+        _ => "vec4(uv, 0.0, 0.0)",
+    };
+    format!(
+        "\
+uniform vec3 row0;
+uniform vec3 row1;
+uniform vec2 uv_max;
+out vec{texcoord} v_TexCoord;
+void main() {{
+    vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
+    vec3 local = vec3(corner - 0.5, 1.0);
+    gl_Position = vec4(dot(row0, local), dot(row1, local), 0.0, 1.0);
+    vec2 uv = vec2(corner.x, 1.0 - corner.y) * uv_max;
+    v_TexCoord = {varying};
+}}"
+    )
+}
+
+/// The layer's placement as a matrix for `mul(vec4(a_Position, 1.0), M)`, with `a_Position`
+/// in the layer's own units, centred.
+pub(super) fn model_view_projection(affine: &super::Affine, size: (f32, f32)) -> [f32; 16] {
+    let [row0, row1] = affine;
+    let (width, height) = (size.0.max(1e-6), size.1.max(1e-6));
+    [
+        row0[0] / width,
+        row1[0] / width,
+        0.0,
+        0.0,
+        row0[1] / height,
+        row1[1] / height,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        row0[2],
+        row1[2],
+        0.0,
+        1.0,
+    ]
 }
 
 pub(super) struct Frame {

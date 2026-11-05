@@ -216,7 +216,9 @@ mod tests {
         }).unwrap();
         let mut names = Vec::new();
         template.fill_defaults(&mut names, &Map::new()).unwrap();
-        let fragment = template.prepare(&Map::new(), &Map::new(), Some(1)).unwrap();
+        let fragment = template
+            .prepare(&Map::new(), &Map::new(), Some(1), None)
+            .unwrap();
         assert_eq!(names, [Some("base".into())]);
         assert_eq!(reads, 2);
         assert!(fragment.source.contains("#define TEXTURE 1"));

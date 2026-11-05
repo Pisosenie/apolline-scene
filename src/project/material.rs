@@ -183,14 +183,8 @@ impl Project {
         } else {
             format!("{shader}.frag")
         };
-        let vertex = format!(
-            "shaders/{}.vert",
-            entry.strip_suffix(".frag").unwrap_or(&entry)
-        );
-        // Every stock shader comes with a vertex shader; ours stands in for it, which holds as
-        // long as all the fragment wants from it is the layer's own coordinates.
-        let vertex_shader = self.try_file(&vertex, 256 * 1024)?.is_some();
-        let template = Template::load(&entry, |name| {
+        let vertex_entry = format!("{}.vert", entry.strip_suffix(".frag").unwrap_or(&entry));
+        let load = |name: &str| {
             self.try_file(name, 256 * 1024)?
                 .map(|bytes| {
                     std::str::from_utf8(&bytes)
@@ -198,20 +192,23 @@ impl Project {
                         .map_err(|_| Error::Format(format!("{name}: shader source is not UTF-8")))
                 })
                 .transpose()
-        })?;
+        };
+        // Every stock shader comes with a vertex shader; it's prepared with the fragment and
+        // the material is refused when it can't be, rather than stood in for.
+        let vertex = match self.try_file(&format!("shaders/{vertex_entry}"), 256 * 1024)? {
+            Some(_) => Some(Template::load(&vertex_entry, load)?),
+            None => None,
+        };
+        let template = Template::load(&entry, load)?;
         template.fill_defaults(&mut names, &combos)?;
         let mask = bindings(&names)?;
-        let fragment = template.prepare(&combos, &constants, Some(mask))?;
+        let fragment = template.prepare(&combos, &constants, Some(mask), vertex)?;
         fragment.validate_inputs(mask)?;
-        if vertex_shader && fragment.texcoord != 2 {
-            return Err(Error::Format(
-                "its vertex shader computes coordinates beyond the layer's own".into(),
-            ));
+        let bytes = fragment.source.len() + fragment.vertex.as_ref().map_or(0, String::len);
+        if bytes > (16 * 1024 * 1024usize).saturating_sub(resources.source_bytes) {
+            return Err(Error::Format("scene shader sources exceed 16 MiB".into()));
         }
-        if fragment.source.len() > (16 * 1024 * 1024usize).saturating_sub(resources.source_bytes) {
-            return Err(Error::Format("scene fragment sources exceed 16 MiB".into()));
-        }
-        resources.source_bytes += fragment.source.len();
+        resources.source_bytes += bytes;
         Ok(Material {
             names,
             fragment: Some(Arc::new(fragment)),

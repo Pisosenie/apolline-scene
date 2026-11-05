@@ -25,12 +25,22 @@ impl Constant {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Stage {
+    Vertex,
+    Fragment,
+}
+
 pub(super) struct Bound {
     pub body: String,
     pub texcoord: u8,
     pub inputs: u8,
     pub animated: bool,
     pub constants: Vec<(String, Constant)>,
+    /// Material values this stage read, by the name the material gives them.
+    pub used: HashSet<String>,
+    /// Name and type of each varying, in order.
+    pub varyings: Vec<(String, String)>,
 }
 
 pub(super) struct Token<'a> {
@@ -43,6 +53,7 @@ pub(super) fn bind(
     source: &str,
     constants: &Map<String, Value>,
     optional: Option<u8>,
+    stage: Stage,
 ) -> Result<Bound, Error> {
     if constants.len() > 128 || constants.keys().any(|key| key.len() > 128) {
         return Err(fail("too many or oversized material constants"));
@@ -55,6 +66,7 @@ pub(super) fn bind(
     let mut inputs = 0u8;
     let mut animated = false;
     let mut bound = Vec::new();
+    let mut varyings = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
         let token = &tokens[index];
@@ -62,10 +74,10 @@ pub(super) fn bind(
         // declare a second output.
         let parameter = index > 0 && matches!(tokens[index - 1].text, "(" | ",");
         if token.text.starts_with("apolline_")
-            || matches!(
-                token.text,
-                "gl_FragData" | "gl_FragDepth" | "layout" | "attribute"
-            )
+            || matches!(token.text, "gl_FragData" | "gl_FragDepth" | "layout")
+            || (token.text == "attribute" && stage == Stage::Fragment)
+            || (token.text == "gl_Position" && stage == Stage::Fragment)
+            || (token.text == "gl_FragColor" && stage == Stage::Vertex)
             || (token.text == "out" && !parameter)
         {
             return Err(fail(format!(
@@ -73,7 +85,7 @@ pub(super) fn bind(
                 token.text
             )));
         }
-        if token.text != "uniform" && token.text != "varying" {
+        if !matches!(token.text, "uniform" | "varying" | "attribute") {
             index += 1;
             continue;
         }
@@ -88,14 +100,32 @@ pub(super) fn bind(
             ));
         }
         index += 4;
+        if token.text == "attribute" {
+            // The host gives these as plain globals, set before the shader's own main.
+            if !matches!(
+                (name, kind),
+                ("a_Position", "vec3") | ("a_TexCoord", "vec2")
+            ) {
+                return Err(fail(format!("unsupported attribute {name}")));
+            }
+            replacements.push((token.start, declaration[3].end, String::new()));
+            continue;
+        }
         if token.text == "varying" {
-            let size = match (name, kind) {
-                ("v_TexCoord", "vec2") => 2,
-                ("v_TexCoord", "vec3") => 3,
-                ("v_TexCoord", "vec4") => 4,
-                _ => return Err(fail(format!("unsupported varying {name}"))),
+            let size = match kind {
+                "float" => 1,
+                "vec2" => 2,
+                "vec3" => 3,
+                "vec4" => 4,
+                _ => return Err(fail(format!("unsupported varying type {kind}"))),
             };
-            texcoord = Some(size);
+            if name == "v_TexCoord" {
+                texcoord = Some(size);
+            }
+            if name.starts_with("g_") || varyings.len() >= 16 {
+                return Err(fail(format!("unsupported varying {name}")));
+            }
+            varyings.push((name.to_owned(), kind.to_owned()));
             continue;
         }
         let annotation = annotation(source, declaration[3].end, name)?;
@@ -105,6 +135,11 @@ pub(super) fn bind(
             && optional.is_none()
         {
             return Err(fail("texture-driven combos need another renderer"));
+        }
+        if stage == Stage::Vertex && kind == "sampler2D" {
+            return Err(fail(
+                "vertex shaders that sample textures need another renderer",
+            ));
         }
         if let Some(suffix) = name.strip_prefix("g_Texture") {
             let bytes = suffix.as_bytes();
@@ -134,6 +169,9 @@ pub(super) fn bind(
         }
         if kind == "sampler2D" {
             return Err(fail("samplers must be named g_Texture0 through g_Texture7"));
+        }
+        if stage == Stage::Vertex && name == "g_ModelViewProjectionMatrix" && kind == "mat4" {
+            continue;
         }
         if kind == "float" && matches!(name, "g_Time" | "g_Frametime") {
             animated = true;
@@ -181,9 +219,6 @@ pub(super) fn bind(
             constant(kind, raw).map_err(|error| fail(format!("uniform {name}: {error}")))?;
         bound.push((name.to_owned(), constant));
     }
-    if let Some(unused) = constants.keys().find(|key| !used.contains(key.as_str())) {
-        return Err(fail(format!("unknown material constant {unused}")));
-    }
     let mut output = String::new();
     let mut from = 0;
     for (start, end, replacement) in replacements {
@@ -201,6 +236,8 @@ pub(super) fn bind(
         inputs,
         animated,
         constants: bound,
+        used,
+        varyings,
     })
 }
 

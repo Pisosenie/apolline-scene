@@ -93,10 +93,17 @@ fn static_fragment_materials_prepare_with_bound_properties_and_shared_sources() 
             .animated
     );
 
-    // A material's own vertex shader gives way to ours while the fragment wants nothing from
-    // it but the layer's coordinates, as stock shaders all come with one.
+    // A material's own vertex shader is prepared with its fragment, and the fragment can read
+    // only what it writes.
     std::fs::write(folder.join("shaders/demo.vert"), "void main() {}").unwrap();
-    assert!(project.prepare().is_ok());
+    assert!(
+        project.prepare().unwrap().layers[0]
+            .fragment
+            .as_ref()
+            .unwrap()
+            .vertex
+            .is_some()
+    );
     std::fs::write(
         folder.join("shaders/demo.frag"),
         "uniform float u_Amount; // {\"material\":\"amount\",\"default\":1}\nvarying vec4 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord.zw, u_Amount, 1.0); }",
@@ -109,6 +116,12 @@ fn static_fragment_materials_prepare_with_bound_properties_and_shared_sources() 
             .is_some_and(|err| err.contains("vertex shader")),
         "{refused:?}"
     );
+    std::fs::write(
+        folder.join("shaders/demo.vert"),
+        "attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nuniform mat4 g_ModelViewProjectionMatrix;\nuniform float u_Amount; // {\"material\":\"amount\",\"default\":1}\nvarying vec4 v_TexCoord;\nvoid main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = vec4(a_TexCoord, a_TexCoord * u_Amount); }",
+    )
+    .unwrap();
+    assert!(project.prepare().is_ok());
     std::fs::remove_dir_all(folder).unwrap();
 }
 

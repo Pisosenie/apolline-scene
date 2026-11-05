@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::Error;
 pub(crate) use parameters::Constant;
+use parameters::Stage;
 use serde_json::{Map, Value};
 
 const FILE_BYTES: usize = 256 * 1024;
@@ -25,6 +26,8 @@ pub struct Fragment {
     /// Material values, set as uniforms for each layer; layers that differ only in these
     /// share a program.
     pub(crate) constants: Vec<(String, Constant)>,
+    /// The material's own vertex shader, when it has one.
+    pub(crate) vertex: Option<String>,
     bindings: Option<u8>,
     pub(crate) files: Vec<String>,
 }
@@ -71,7 +74,7 @@ impl Fragment {
         bindings: Option<u8>,
         load: impl FnMut(&str) -> Result<Option<String>, Error>,
     ) -> Result<Self, Error> {
-        Template::load(entry, load)?.prepare(combos, constants, bindings)
+        Template::load(entry, load)?.prepare(combos, constants, bindings, None)
     }
 }
 
@@ -128,6 +131,7 @@ impl Template {
         combos: &Map<String, Value>,
         constants: &Map<String, Value>,
         bindings: Option<u8>,
+        vertex: Option<Template>,
     ) -> Result<Fragment, Error> {
         if bindings.is_some_and(|mask| mask & 1 == 0) {
             return Err(fail("image materials require texture slot zero"));
@@ -150,70 +154,140 @@ impl Template {
         } else {
             None
         };
+        let controlled = optional
+            .as_ref()
+            .map(|options| options.controlled.clone())
+            .unwrap_or_default();
         for (name, value) in combos {
-            if optional
-                .as_ref()
-                .is_some_and(|options| options.controlled.contains(name))
-            {
+            if controlled.contains(name) {
                 continue;
             }
-            if !expansion.combos.contains_key(name) {
+            let in_vertex = vertex
+                .as_ref()
+                .is_some_and(|vertex| vertex.combos.contains_key(name));
+            if expansion.combos.contains_key(name) {
+                expansion.combos.insert(name.clone(), integer(value)?);
+            } else if !in_vertex {
                 return Err(fail(format!("unknown combo {name}")));
             }
-            expansion.combos.insert(name.clone(), integer(value)?);
         }
-        let mut blocked = false;
-        for line in expansion.output.lines() {
-            let visible = visible_line(line, &mut blocked);
-            let Some(directive) = visible.trim().strip_prefix('#').map(str::trim_start) else {
-                continue;
-            };
-            let (command, rest) = directive
-                .split_once(char::is_whitespace)
-                .unwrap_or((directive, ""));
-            if matches!(command, "define" | "undef") {
-                let name = rest
-                    .trim_start()
-                    .split(|character: char| character.is_whitespace() || character == '(')
-                    .next()
-                    .unwrap_or("");
-                if expansion.combos.contains_key(name)
-                    || protected(name)
-                    || optional
-                        .as_ref()
-                        .is_some_and(|options| options.controlled.contains(name))
-                {
-                    return Err(fail(format!(
-                        "shader redefines host-controlled macro {name}"
-                    )));
+        let missing = optional.as_ref().map(|options| options.missing);
+        let selected = stage(&expansion.output, &expansion.combos, &controlled)?;
+        let mut bound = parameters::bind(&selected, constants, missing, Stage::Fragment)?;
+        let mut files = expansion.files;
+        let vertex = match vertex {
+            Some(vertex) => {
+                let mut values = vertex.combos.clone();
+                for (name, value) in values.iter_mut() {
+                    if let Some(chosen) = expansion.combos.get(name) {
+                        *value = *chosen;
+                    } else if let Some(chosen) = combos.get(name) {
+                        *value = integer(chosen)?;
+                    }
                 }
+                let selected = stage(&vertex.output, &values, &controlled)?;
+                let stage = parameters::bind(&selected, constants, missing, Stage::Vertex)?;
+                for varying in &bound.varyings {
+                    if !stage.varyings.contains(varying) {
+                        return Err(fail(format!(
+                            "varying {} isn't written by the vertex shader",
+                            varying.0
+                        )));
+                    }
+                }
+                for (name, value) in stage.constants {
+                    match bound.constants.iter().find(|(known, _)| *known == name) {
+                        Some((_, known)) if *known != value => {
+                            return Err(fail(format!("uniform {name} differs between stages")));
+                        }
+                        Some(_) => {}
+                        None => bound.constants.push((name, value)),
+                    }
+                }
+                bound.used.extend(stage.used);
+                bound.inputs |= stage.inputs;
+                bound.animated |= stage.animated;
+                files.extend(vertex.files);
+                Some(source(VERTEX, &values, &stage.body, VERTEX_MAIN)?)
             }
-        }
-        let selected = conditional::select(&expansion.output, &expansion.combos)?;
-        let bound = parameters::bind(
-            &selected,
-            constants,
-            optional.as_ref().map(|options| options.missing),
-        )?;
-        let mut source = String::from(COMPATIBILITY);
-        for (name, value) in expansion.combos {
-            source.push_str(&format!("#define {name} {value}\n"));
-        }
-        source.push_str(&bound.body);
-        source.push_str("\n#undef main\nvoid main() { apolline_effect_main(); apolline_effect_color *= apolline_layer_tint; }\n");
-        if source.len() > TOTAL_BYTES + 64 * 1024 {
-            return Err(fail("prepared source exceeds its budget"));
+            None => {
+                if let Some((name, _)) =
+                    bound.varyings.iter().find(|(name, _)| name != "v_TexCoord")
+                {
+                    return Err(fail(format!("unsupported varying {name}")));
+                }
+                None
+            }
+        };
+        if let Some(unused) = constants
+            .keys()
+            .find(|key| !bound.used.contains(key.as_str()))
+        {
+            return Err(fail(format!("unknown material constant {unused}")));
         }
         Ok(Fragment {
-            source,
+            source: source(FRAGMENT, &expansion.combos, &bound.body, FRAGMENT_MAIN)?,
+            vertex,
             texcoord: bound.texcoord,
             inputs: bound.inputs,
             animated: bound.animated,
             constants: bound.constants,
             bindings,
-            files: expansion.files,
+            files,
         })
     }
+}
+
+/// Picks the source a stage's combos select, after making sure it doesn't redefine any of
+/// the macros the host sets.
+fn stage(
+    output: &str,
+    combos: &BTreeMap<String, i32>,
+    controlled: &std::collections::HashSet<String>,
+) -> Result<String, Error> {
+    let mut blocked = false;
+    for line in output.lines() {
+        let visible = visible_line(line, &mut blocked);
+        let Some(directive) = visible.trim().strip_prefix('#').map(str::trim_start) else {
+            continue;
+        };
+        let (command, rest) = directive
+            .split_once(char::is_whitespace)
+            .unwrap_or((directive, ""));
+        if matches!(command, "define" | "undef") {
+            let name = rest
+                .trim_start()
+                .split(|character: char| character.is_whitespace() || character == '(')
+                .next()
+                .unwrap_or("");
+            if combos.contains_key(name) || protected(name) || controlled.contains(name) {
+                return Err(fail(format!(
+                    "shader redefines host-controlled macro {name}"
+                )));
+            }
+        }
+    }
+    conditional::select(output, combos)
+}
+
+/// A stage's whole source: the dialect, its combos, its body and the host's own main.
+fn source(
+    prelude: &str,
+    combos: &BTreeMap<String, i32>,
+    body: &str,
+    main: &str,
+) -> Result<String, Error> {
+    let mut source = String::from(COMMON);
+    source.push_str(prelude);
+    for (name, value) in combos {
+        source.push_str(&format!("#define {name} {value}\n"));
+    }
+    source.push_str(body);
+    source.push_str(main);
+    if source.len() > TOTAL_BYTES + 64 * 1024 {
+        return Err(fail("prepared source exceeds its budget"));
+    }
+    Ok(source)
 }
 
 fn fail(message: impl std::fmt::Display) -> Error {
@@ -439,9 +513,8 @@ fn visible_line(line: &str, blocked: &mut bool) -> String {
     output
 }
 
-const COMPATIBILITY: &str = "\
+const COMMON: &str = "\
 #define GLSL 1
-#define varying in
 #define texSample2D texture
 #define texSample2DLod textureLod
 #define frac fract
@@ -457,11 +530,36 @@ const COMPATIBILITY: &str = "\
 #define CAST4(x) vec4(x)
 #define CAST3X3(x) mat3(x)
 #define main apolline_effect_main
+";
+
+const FRAGMENT: &str = "\
+#define varying in
 #define gl_FragColor apolline_effect_color
 out vec4 apolline_effect_color;
 uniform vec4 apolline_layer_tint;
 ";
 
+const FRAGMENT_MAIN: &str = "\n#undef main\nvoid main() { apolline_effect_main(); apolline_effect_color *= apolline_layer_tint; }\n";
+
+/// The attributes are globals the host's main sets: the layer's corners in its own units,
+/// centred, and their texture coordinates.
+const VERTEX: &str = "\
+#define varying out
+uniform vec2 apolline_layer_size;
+uniform vec2 apolline_uv_max;
+vec3 a_Position;
+vec2 a_TexCoord;
+";
+
+const VERTEX_MAIN: &str = "
+#undef main
+void main() {
+    vec2 apolline_corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
+    a_Position = vec3((apolline_corner - 0.5) * apolline_layer_size, 0.0);
+    a_TexCoord = vec2(apolline_corner.x, 1.0 - apolline_corner.y) * apolline_uv_max;
+    apolline_effect_main();
+}
+";
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,6 +727,91 @@ mod tests {
         assert_eq!(default.source, edited.source);
         assert_ne!(default.constants, edited.constants);
         assert_eq!(prepare(source, json!({}), json!({})).unwrap(), default);
+    }
+
+    fn staged(
+        vertex: &str,
+        fragment: &str,
+        combos: Value,
+        constants: Value,
+    ) -> Result<Fragment, Error> {
+        let load = |path: &str| {
+            Ok(match path {
+                "shaders/demo.vert" => Some(vertex.to_owned()),
+                "shaders/demo.frag" => Some(fragment.to_owned()),
+                _ => None,
+            })
+        };
+        let vertex = Template::load("demo.vert", load)?;
+        Template::load("demo.frag", load)?.prepare(
+            combos.as_object().unwrap(),
+            constants.as_object().unwrap(),
+            Some(1),
+            Some(vertex),
+        )
+    }
+
+    #[test]
+    fn a_vertex_stage_shares_combos_values_and_varyings_with_its_fragment() {
+        let vertex = "// [COMBO] {\"combo\":\"SCROLL\",\"default\":0}\nattribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nuniform mat4 g_ModelViewProjectionMatrix;\nuniform float g_Time;\nuniform float u_Speed; // {\"material\":\"speed\",\"default\":1}\nvarying vec4 v_TexCoord;\nvarying float v_Fade;\nvoid main() {\n gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);\n#if SCROLL\n v_TexCoord = vec4(a_TexCoord + g_Time * u_Speed, a_TexCoord);\n#else\n v_TexCoord = vec4(a_TexCoord, a_TexCoord);\n#endif\n v_Fade = 1.0;\n}";
+        let fragment = "uniform sampler2D g_Texture0;\nvarying vec4 v_TexCoord;\nvarying float v_Fade;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy) * v_Fade; }";
+        let prepared = staged(vertex, fragment, json!({"SCROLL": 1}), json!({"speed": 2})).unwrap();
+        let source = prepared.vertex.as_deref().unwrap();
+        assert!(source.contains("#define SCROLL 1"));
+        assert!(!source.contains("attribute"));
+        assert!(prepared.animated);
+        assert_eq!(prepared.constants[0].0, "u_Speed");
+
+        for (vertex, fragment, why) in [
+            ("void main() {}", fragment, "isn't written"),
+            (
+                "varying vec2 v_TexCoord;\nvarying float v_Fade;\nvoid main() {}",
+                fragment,
+                "isn't written",
+            ),
+            (
+                "uniform mat4 g_EffectTextureProjectionMatrix;\nvoid main() {}",
+                "void main() {}",
+                "unsupported uniform",
+            ),
+            (
+                "uniform sampler2D g_Texture0;\nvoid main() {}",
+                "void main() {}",
+                "sample textures",
+            ),
+            (
+                "attribute vec4 a_Color;\nvoid main() {}",
+                "void main() {}",
+                "attribute",
+            ),
+            (
+                "void main() { gl_FragColor = vec4(1.0); }",
+                "void main() {}",
+                "reserved",
+            ),
+            (
+                "void main() {}",
+                "void main() { gl_Position = vec4(1.0); }",
+                "reserved",
+            ),
+        ] {
+            let error = staged(vertex, fragment, json!({}), json!({}))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(why), "{why}: {error}");
+        }
+        let unused = staged(
+            "void main() {}",
+            "void main() {}",
+            json!({}),
+            json!({"speed": 2}),
+        );
+        assert!(
+            unused
+                .unwrap_err()
+                .to_string()
+                .contains("unknown material constant")
+        );
     }
 
     #[test]

@@ -15,8 +15,9 @@ struct Branch {
 /// Selects branches before uniform introspection; the driver receives the same selected code.
 pub(super) fn select(source: &str, combos: &BTreeMap<String, i32>) -> Result<String, Error> {
     let mut macros = Macros::new();
-    for line in super::COMPATIBILITY
+    for line in super::COMMON
         .lines()
+        .chain(super::FRAGMENT.lines())
         .filter_map(|line| line.strip_prefix("#define "))
     {
         let name = line

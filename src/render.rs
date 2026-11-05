@@ -81,6 +81,8 @@ struct Program {
     row0: Option<glow::UniformLocation>,
     row1: Option<glow::UniformLocation>,
     uv_max: Option<glow::UniformLocation>,
+    mvp: Option<glow::UniformLocation>,
+    layer_size: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
     channels: Option<glow::UniformLocation>,
     frame: Option<material::Frame>,
@@ -193,22 +195,24 @@ impl Renderer {
                 let mut program = 0;
                 let mut constants = Vec::new();
                 if let Some(fragment) = &layer.fragment {
-                    program = match variants.get(fragment.source.as_str()) {
+                    let key = (fragment.vertex.as_deref(), fragment.source.as_str());
+                    program = match variants.get(&key) {
                         Some(index) => *index,
                         None => {
+                            let bytes = fragment.source.len()
+                                + fragment.vertex.as_ref().map_or(0, String::len);
                             if variants.len() >= 64
-                                || fragment.source.len()
-                                    > (16 * 1024 * 1024usize).saturating_sub(source_bytes)
+                                || bytes > (16 * 1024 * 1024usize).saturating_sub(source_bytes)
                             {
                                 return Err(Error::Format(
                                     "renderer exceeds fragment program budget".into(),
                                 ));
                             }
                             let custom = unsafe { material::program(gl, fragment)? };
-                            source_bytes += fragment.source.len();
+                            source_bytes += bytes;
                             let index = renderer.programs.len();
                             renderer.programs.push(custom);
-                            variants.insert(fragment.source.as_str(), index);
+                            variants.insert(key, index);
                             index
                         }
                     };
@@ -383,6 +387,14 @@ impl Renderer {
                 gl.uniform_3_f32_slice(program.row0.as_ref(), &affine[0]);
                 gl.uniform_3_f32_slice(program.row1.as_ref(), &affine[1]);
                 gl.uniform_2_f32_slice(program.uv_max.as_ref(), &layer.uv_max);
+                if program.mvp.is_some() {
+                    gl.uniform_matrix_4_f32_slice(
+                        program.mvp.as_ref(),
+                        false,
+                        &material::model_view_projection(&affine, layer.size),
+                    );
+                    gl.uniform_2_f32(program.layer_size.as_ref(), layer.size.0, layer.size.1);
+                }
                 gl.uniform_4_f32_slice(program.tint.as_ref(), &layer.tint);
                 gl.uniform_1_i32(program.channels.as_ref(), layer.channels);
                 for (location, value) in &layer.constants {
@@ -452,6 +464,8 @@ unsafe fn program(gl: &glow::Context) -> Result<Program, Error> {
                 row0,
                 row1,
                 uv_max,
+                mvp: None,
+                layer_size: None,
                 tint,
                 channels: uniform("picture_channels"),
                 frame: None,
