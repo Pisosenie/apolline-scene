@@ -10,6 +10,7 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 use crate::Error;
+pub(crate) use parameters::Constant;
 use serde_json::{Map, Value};
 
 const FILE_BYTES: usize = 256 * 1024;
@@ -21,6 +22,9 @@ pub struct Fragment {
     pub(crate) texcoord: u8,
     pub(crate) inputs: u8,
     pub(crate) animated: bool,
+    /// Material values, set as uniforms for each layer; layers that differ only in these
+    /// share a program.
+    pub(crate) constants: Vec<(String, Constant)>,
     bindings: Option<u8>,
     pub(crate) files: Vec<String>,
 }
@@ -186,7 +190,7 @@ impl Template {
             }
         }
         let selected = conditional::select(&expansion.output, &expansion.combos)?;
-        let (body, texcoord, inputs, animated) = parameters::bind(
+        let bound = parameters::bind(
             &selected,
             constants,
             optional.as_ref().map(|options| options.missing),
@@ -195,16 +199,17 @@ impl Template {
         for (name, value) in expansion.combos {
             source.push_str(&format!("#define {name} {value}\n"));
         }
-        source.push_str(&body);
+        source.push_str(&bound.body);
         source.push_str("\n#undef main\nvoid main() { apolline_effect_main(); apolline_effect_color *= apolline_layer_tint; }\n");
         if source.len() > TOTAL_BYTES + 64 * 1024 {
             return Err(fail("prepared source exceeds its budget"));
         }
         Ok(Fragment {
             source,
-            texcoord,
-            inputs,
-            animated,
+            texcoord: bound.texcoord,
+            inputs: bound.inputs,
+            animated: bound.animated,
+            constants: bound.constants,
             bindings,
             files: expansion.files,
         })
@@ -507,10 +512,16 @@ mod tests {
         )
         .unwrap();
         assert!(fragment.source.contains("#define GRAY 1"));
-        assert!(
-            fragment
-                .source
-                .contains("const float u_Amount = 5.000000000e-1;")
+        assert!(fragment.source.contains("uniform float u_Amount;"));
+        assert_eq!(
+            fragment.constants,
+            [(
+                "u_Amount".to_owned(),
+                Constant::Float {
+                    bits: [0.5f32.to_bits(), 0, 0, 0],
+                    count: 1
+                }
+            )]
         );
         assert!(fragment.source.contains("float half_value"));
         assert!(!fragment.source.contains("#include"));
@@ -615,7 +626,8 @@ mod tests {
         let source = "uniform vec3 u_Color; // {\"material\":\"color\",\"default\":\"1 0 0\"}\nvoid main() { gl_FragColor = vec4(u_Color, 1.0); }";
         let default = prepare(source, json!({}), json!({})).unwrap();
         let edited = prepare(source, json!({}), json!({"color":"0 1 0"})).unwrap();
-        assert_ne!(default.source, edited.source);
+        assert_eq!(default.source, edited.source);
+        assert_ne!(default.constants, edited.constants);
         assert_eq!(prepare(source, json!({}), json!({})).unwrap(), default);
     }
 

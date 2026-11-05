@@ -3,6 +3,36 @@ use crate::Error;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
+/// A material value the program reads as a uniform, set for each layer that draws with it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Constant {
+    Bool(bool),
+    Int(i32),
+    /// One to four components, kept as bits so prepared fragments can be compared.
+    Float {
+        bits: [u32; 4],
+        count: u8,
+    },
+}
+
+impl Constant {
+    pub fn floats(&self) -> [f32; 4] {
+        match self {
+            Constant::Float { bits, .. } => bits.map(f32::from_bits),
+            Constant::Int(value) => [*value as f32, 0.0, 0.0, 0.0],
+            Constant::Bool(value) => [f32::from(u8::from(*value)), 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+pub(super) struct Bound {
+    pub body: String,
+    pub texcoord: u8,
+    pub inputs: u8,
+    pub animated: bool,
+    pub constants: Vec<(String, Constant)>,
+}
+
 pub(super) struct Token<'a> {
     pub(super) text: &'a str,
     pub(super) start: usize,
@@ -13,7 +43,7 @@ pub(super) fn bind(
     source: &str,
     constants: &Map<String, Value>,
     optional: Option<u8>,
-) -> Result<(String, u8, u8, bool), Error> {
+) -> Result<Bound, Error> {
     if constants.len() > 128 || constants.keys().any(|key| key.len() > 128) {
         return Err(fail("too many or oversized material constants"));
     }
@@ -24,6 +54,7 @@ pub(super) fn bind(
     let mut texcoord = None;
     let mut inputs = 0u8;
     let mut animated = false;
+    let mut bound = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
         let token = &tokens[index];
@@ -120,34 +151,35 @@ pub(super) fn bind(
             ("g_Alpha", "float") => Some("1.0"),
             _ => None,
         };
-        let value = if let Some(neutral) = neutral {
-            neutral.to_owned()
+        if let Some(neutral) = neutral {
+            replacements.push((
+                token.start,
+                declaration[3].end,
+                format!("const {kind} {name} = {neutral};"),
+            ));
+            continue;
+        }
+        if name.starts_with("g_") {
+            return Err(fail(format!("dynamic or unsupported uniform {name}")));
+        }
+        let material = annotation
+            .get("material")
+            .and_then(Value::as_str)
+            .unwrap_or(name);
+        let (key, supplied) = if let Some(value) = constants.get(material) {
+            (material, Some(value))
         } else {
-            if name.starts_with("g_") {
-                return Err(fail(format!("dynamic or unsupported uniform {name}")));
-            }
-            let material = annotation
-                .get("material")
-                .and_then(Value::as_str)
-                .unwrap_or(name);
-            let (key, supplied) = if let Some(value) = constants.get(material) {
-                (material, Some(value))
-            } else {
-                (name, constants.get(name))
-            };
-            let raw = supplied
-                .or_else(|| annotation.get("default"))
-                .ok_or_else(|| fail(format!("uniform {name} needs a material value or default")))?;
-            if supplied.is_some() {
-                used.insert(key.to_owned());
-            }
-            literal(kind, raw).map_err(|error| fail(format!("uniform {name}: {error}")))?
+            (name, constants.get(name))
         };
-        replacements.push((
-            token.start,
-            declaration[3].end,
-            format!("const {kind} {name} = {value};"),
-        ));
+        let raw = supplied
+            .or_else(|| annotation.get("default"))
+            .ok_or_else(|| fail(format!("uniform {name} needs a material value or default")))?;
+        if supplied.is_some() {
+            used.insert(key.to_owned());
+        }
+        let constant =
+            constant(kind, raw).map_err(|error| fail(format!("uniform {name}: {error}")))?;
+        bound.push((name.to_owned(), constant));
     }
     if let Some(unused) = constants.keys().find(|key| !used.contains(key.as_str())) {
         return Err(fail(format!("unknown material constant {unused}")));
@@ -163,7 +195,13 @@ pub(super) fn bind(
         from = end;
     }
     output.push_str(&source[from..]);
-    Ok((output, texcoord.unwrap_or(2), inputs, animated))
+    Ok(Bound {
+        body: output,
+        texcoord: texcoord.unwrap_or(2),
+        inputs,
+        animated,
+        constants: bound,
+    })
 }
 
 pub(super) fn annotation(source: &str, end: usize, name: &str) -> Result<Value, Error> {
@@ -180,13 +218,13 @@ pub(super) fn annotation(source: &str, end: usize, name: &str) -> Result<Value, 
     }
 }
 
-fn literal(kind: &str, value: &Value) -> Result<String, Error> {
+fn constant(kind: &str, value: &Value) -> Result<Constant, Error> {
     let value = crate::value::plain(value);
     if kind == "bool" {
         return value
             .as_bool()
             .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-            .map(|value| value.to_string())
+            .map(Constant::Bool)
             .ok_or_else(|| fail("expected a boolean"));
     }
     if kind == "int" {
@@ -194,7 +232,7 @@ fn literal(kind: &str, value: &Value) -> Result<String, Error> {
             .as_i64()
             .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
             .and_then(|value| i32::try_from(value).ok())
-            .map(|value| value.to_string())
+            .map(Constant::Int)
             .ok_or_else(|| fail("expected a signed integer"));
     }
     let count = match kind {
@@ -227,15 +265,13 @@ fn literal(kind: &str, value: &Value) -> Result<String, Error> {
     if numbers.len() != count || numbers.iter().any(|value| !(*value as f32).is_finite()) {
         return Err(fail(format!("expected {count} finite numeric components")));
     }
-    let values = numbers
-        .iter()
-        .map(|value| format!("{:.9e}", *value as f32))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(if count == 1 {
-        values
-    } else {
-        format!("{kind}({values})")
+    let mut bits = [0; 4];
+    for (bit, number) in bits.iter_mut().zip(&numbers) {
+        *bit = (*number as f32).to_bits();
+    }
+    Ok(Constant::Float {
+        bits,
+        count: count as u8,
     })
 }
 

@@ -20,6 +20,7 @@ use glow::HasContext;
 use crate::Error;
 use crate::project::{Blending, Layer};
 use crate::scene::{Parallax, Scene};
+use crate::shader::Constant;
 
 /// How far a layer of depth 1 travels at the pointer's furthest, as a share of the scene,
 /// per unit of the scene's parallax amount.
@@ -71,6 +72,7 @@ struct Drawn {
     tint: [f32; 4],
     blending: Blending,
     depth: [f32; 2],
+    constants: Vec<(Option<glow::UniformLocation>, Constant)>,
 }
 
 struct Program {
@@ -189,9 +191,9 @@ impl Renderer {
                     });
                 }
                 let mut program = 0;
+                let mut constants = Vec::new();
                 if let Some(fragment) = &layer.fragment {
-                    let key = Arc::as_ptr(fragment);
-                    program = match variants.get(&key) {
+                    program = match variants.get(fragment.source.as_str()) {
                         Some(index) => *index,
                         None => {
                             if variants.len() >= 64
@@ -206,10 +208,18 @@ impl Renderer {
                             source_bytes += fragment.source.len();
                             let index = renderer.programs.len();
                             renderer.programs.push(custom);
-                            variants.insert(key, index);
+                            variants.insert(fragment.source.as_str(), index);
                             index
                         }
                     };
+                    let id = renderer.programs[program].id;
+                    constants = fragment
+                        .constants
+                        .iter()
+                        .map(|(name, value)| unsafe {
+                            (gl.get_uniform_location(id, name), value.clone())
+                        })
+                        .collect();
                 }
                 let image = &layer.image;
                 let (origin, size) = if layer.fullscreen {
@@ -236,6 +246,7 @@ impl Renderer {
                     tint: [image.color[0], image.color[1], image.color[2], image.alpha],
                     blending: layer.blending,
                     depth: image.depth,
+                    constants,
                 });
             }
             Ok(())
@@ -374,6 +385,9 @@ impl Renderer {
                 gl.uniform_2_f32_slice(program.uv_max.as_ref(), &layer.uv_max);
                 gl.uniform_4_f32_slice(program.tint.as_ref(), &layer.tint);
                 gl.uniform_1_i32(program.channels.as_ref(), layer.channels);
+                for (location, value) in &layer.constants {
+                    material::set(gl, location.as_ref(), value);
+                }
                 for input in &layer.inputs {
                     gl.active_texture(glow::TEXTURE0 + u32::from(input.slot));
                     gl.bind_sampler(u32::from(input.slot), None);

@@ -61,7 +61,7 @@ fn static_fragment_materials_prepare_with_bound_properties_and_shared_sources() 
         .unwrap();
     let prepared = project.prepare_still().unwrap();
     let first = prepared.layers[0].fragment.as_ref().unwrap();
-    assert!(first.source.contains("2.500000000e-1"));
+    assert_eq!(first.constants[0].1.floats()[0], 0.25);
     assert!(Arc::ptr_eq(
         first,
         prepared.layers[1].fragment.as_ref().unwrap()

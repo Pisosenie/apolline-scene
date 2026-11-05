@@ -1,5 +1,6 @@
 use super::Program;
-use crate::{Error, shader::Fragment};
+use crate::Error;
+use crate::shader::{Constant, Fragment};
 use glow::HasContext;
 
 /// # Safety
@@ -109,6 +110,30 @@ impl Frame {
             gl.uniform_3_f32(self.screen.as_ref(), width, height, width / height);
             gl.uniform_2_f32(self.texel.as_ref(), 1.0 / width, 1.0 / height);
             gl.uniform_2_f32(self.half_texel.as_ref(), 0.5 / width, 0.5 / height);
+        }
+    }
+}
+
+/// # Safety
+/// The GL context and the program the location belongs to must be current on this thread.
+pub(super) unsafe fn set(
+    gl: &glow::Context,
+    location: Option<&glow::UniformLocation>,
+    value: &Constant,
+) {
+    unsafe {
+        match *value {
+            Constant::Bool(flag) => gl.uniform_1_i32(location, i32::from(flag)),
+            Constant::Int(number) => gl.uniform_1_i32(location, number),
+            Constant::Float { count, .. } => {
+                let [x, y, z, w] = value.floats();
+                match count {
+                    1 => gl.uniform_1_f32(location, x),
+                    2 => gl.uniform_2_f32(location, x, y),
+                    3 => gl.uniform_3_f32(location, x, y, z),
+                    _ => gl.uniform_4_f32(location, x, y, z, w),
+                }
+            }
         }
     }
 }
