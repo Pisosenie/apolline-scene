@@ -16,6 +16,8 @@ pub(super) struct Material {
     pub blending: Blending,
     /// What a plain image material multiplies the layer's brightness and alpha by.
     pub shade: [f32; 2],
+    /// A plain colour with no texture, which the layer's colour and size make.
+    pub solid: bool,
 }
 
 impl Project {
@@ -151,6 +153,20 @@ impl Project {
         let mut names = names(pass.get("textures"))?;
         // Wallpaper Engine's plain image shaders, in their versions, draw what the built-in
         // layer shader draws when nothing varies them.
+        if shader == "flat" && names.iter().all(Option::is_none) {
+            if !combos.is_empty() || !constants.is_empty() {
+                return Err(Error::Format(
+                    "flat colour options need another renderer".into(),
+                ));
+            }
+            return Ok(Material {
+                names: Vec::new(),
+                fragment: None,
+                blending,
+                shade: [1.0; 2],
+                solid: true,
+            });
+        }
         if matches!(
             shader,
             "genericimage" | "genericimage2" | "genericimage3" | "genericimage4"
@@ -167,6 +183,7 @@ impl Project {
                 fragment: None,
                 blending,
                 shade,
+                solid: false,
             });
         }
         let fragment = self.custom(shader, &combos, &constants, &mut names, false, resources)?;
@@ -175,6 +192,7 @@ impl Project {
             fragment: Some(fragment),
             blending,
             shade: [1.0; 2],
+            solid: false,
         })
     }
 

@@ -34,6 +34,8 @@ pub struct Parallax {
 pub enum Object {
     Image(Image),
     Particles(Particles),
+    /// Nothing to draw: a place others hang from.
+    Group,
     Sound,
     Light,
     Other,
@@ -104,11 +106,12 @@ impl Scene {
                 delay: number(field("cameraparallaxdelay")).unwrap_or(0.1),
                 mouse: number(field("cameraparallaxmouseinfluence")).unwrap_or(0.5),
             });
-        let objects = root
+        let raw = root
             .get("objects")
             .and_then(Value::as_array)
-            .map(|objects| objects.iter().map(object).collect())
+            .map(Vec::as_slice)
             .unwrap_or_default();
+        let objects = hang(raw, raw.iter().map(object).collect());
         Ok(Scene {
             size: size.unwrap_or(DEFAULT_SIZE),
             perspective: size.is_none(),
@@ -208,7 +211,93 @@ fn object(value: &Value) -> Object {
     if field("light").is_some() {
         return Object::Light;
     }
+    let set = |key: &str| field(key).is_some_and(|value| !value.is_null());
+    if !set("image") && !set("model") && !set("text") {
+        return Object::Group;
+    }
     Object::Other
+}
+
+/// Where an object sits on its own, before its parents move it.
+struct Node {
+    id: Option<i64>,
+    parent: Option<i64>,
+    origin: [f32; 3],
+    scale: [f32; 3],
+    angle: f32,
+    visible: bool,
+    /// Whether its parents' visibility reaches it.
+    inherits: bool,
+}
+
+fn node(value: &Value) -> Node {
+    let field = |name: &str| value.get(name);
+    let id = |name: &str| field(name).and_then(Value::as_i64);
+    Node {
+        id: id("id"),
+        parent: id("parent"),
+        origin: vector(field("origin"), [0.0; 3]),
+        scale: vector(field("scale"), [1.0; 3]),
+        angle: vector(field("angles"), [0.0; 3])[2],
+        visible: flag(field("visible")).unwrap_or(true),
+        inherits: !flag(field("disablepropagation")).unwrap_or(false),
+    }
+}
+
+/// Places each object inside its parents: a child's origin is in its parent's units, turned
+/// and scaled with it, and a hidden parent hides it too.
+fn hang(raw: &[Value], mut objects: Vec<Object>) -> Vec<Object> {
+    let nodes: Vec<Node> = raw.iter().map(node).collect();
+    let index: std::collections::HashMap<i64, usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(at, node)| Some((node.id?, at)))
+        .collect();
+    for (at, object) in objects.iter_mut().enumerate() {
+        let mut origin = nodes[at].origin;
+        let mut scale = nodes[at].scale;
+        let mut angle = 0.0;
+        let mut visible = true;
+        let mut inherits = nodes[at].inherits;
+        let mut parent = nodes[at].parent;
+        // A bounded walk, so a loop of parents ends.
+        for _ in 0..32 {
+            let Some(&up) = parent.and_then(|id| index.get(&id)) else {
+                break;
+            };
+            let above = &nodes[up];
+            let (sin, cos) = above.angle.sin_cos();
+            let local = [origin[0] * above.scale[0], origin[1] * above.scale[1]];
+            origin = [
+                above.origin[0] + cos * local[0] - sin * local[1],
+                above.origin[1] + sin * local[0] + cos * local[1],
+                above.origin[2] + origin[2] * above.scale[2],
+            ];
+            scale = [0, 1, 2].map(|axis| scale[axis] * above.scale[axis]);
+            angle += above.angle;
+            if inherits {
+                visible &= above.visible;
+            }
+            inherits &= above.inherits;
+            parent = above.parent;
+        }
+        match object {
+            Object::Image(image) => {
+                image.origin = origin;
+                image.scale = scale;
+                image.angles[2] += angle;
+                image.visible &= visible;
+            }
+            Object::Particles(particles) => {
+                particles.origin = origin;
+                particles.scale = scale;
+                particles.angles[2] += angle;
+                particles.visible &= visible;
+            }
+            _ => {}
+        }
+    }
+    objects
 }
 
 /// `topleft` and the rest as the point on the layer they name.
@@ -284,5 +373,32 @@ mod tests {
         .unwrap();
         assert_eq!(tied.missing(), [Missing::Conditional]);
         assert!(Scene::parse("not json").is_err());
+    }
+
+    #[test]
+    fn children_sit_in_their_parents_turned_scaled_and_hidden_with_them() {
+        let scene = Scene::parse(
+            r#"{"general": {"orthogonalprojection": {"width": 400, "height": 400}}, "objects": [
+                {"id": 1, "name": "group", "origin": "100 100 0", "scale": "2 2 1", "angles": "0 0 1.5707964"},
+                {"id": 2, "parent": 1, "image": "a.json", "origin": "10 0 0", "scale": "0.5 1 1"},
+                {"id": 3, "parent": 2, "image": "b.json", "origin": "0 0 0"},
+                {"id": 4, "name": "hidden", "visible": false},
+                {"id": 5, "parent": 4, "image": "c.json"},
+                {"id": 6, "parent": 4, "image": "d.json", "disablepropagation": true}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(scene.missing(), []);
+        let images: Vec<&Image> = scene.images().collect();
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+        assert!(
+            close(images[0].origin, [100.0, 120.0, 0.0]),
+            "{:?}",
+            images[0].origin
+        );
+        assert_eq!(images[0].scale, [1.0, 2.0, 1.0]);
+        assert!((images[0].angles[2] - 1.5707964).abs() < 1e-6);
+        assert!(close(images[1].origin, [100.0, 120.0, 0.0]));
+        assert_eq!((images[2].visible, images[3].visible), (false, true));
     }
 }

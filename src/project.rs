@@ -79,6 +79,7 @@ struct Resolved {
     blending: Blending,
     fullscreen: bool,
     shade: [f32; 2],
+    solid: bool,
 }
 
 impl Project {
@@ -324,9 +325,16 @@ impl Project {
         let mut image = image.clone();
         image.brightness *= resolved.shade[0];
         image.alpha *= resolved.shade[1];
+        // A plain colour is as big as the layer says, which effects drawn over it need.
+        let texture = match (resolved.solid, image.size) {
+            (true, Some((width, height))) => {
+                Arc::new(Texture::solid(width.round() as u32, height.round() as u32))
+            }
+            _ => Arc::clone(&resolved.texture),
+        };
         Ok(Layer {
             image,
-            texture: Arc::clone(&resolved.texture),
+            texture,
             secondary: resolved.secondary.clone(),
             fragment: resolved.fragment.clone(),
             blending: resolved.blending,
@@ -365,7 +373,11 @@ impl Project {
                 });
             }
         }
-        let texture = decoded.remove(0).texture;
+        let texture = if material.solid {
+            Arc::new(Texture::solid(1, 1))
+        } else {
+            decoded.remove(0).texture
+        };
         Ok(Resolved {
             texture,
             secondary: decoded,
@@ -373,6 +385,7 @@ impl Project {
             blending: material.blending,
             fullscreen: flag(model.get("fullscreen")).unwrap_or(false),
             shade,
+            solid: material.solid,
         })
     }
 }

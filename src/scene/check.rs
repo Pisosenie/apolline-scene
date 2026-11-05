@@ -127,6 +127,7 @@ const IMAGE: &[&str] = &[
     "name",
     "origin",
     "parallaxDepth",
+    "parent",
     "perspective",
     "scale",
     "size",
@@ -161,7 +162,26 @@ const PARTICLES: &[&str] = &[
     "name",
     "origin",
     "parallaxDepth",
+    "parent",
     "particle",
+    "scale",
+    "solid",
+    "visible",
+];
+
+/// Group keys: a group only places what hangs from it.
+const GROUP: &[&str] = &[
+    "angles",
+    "castshadow",
+    "disablepropagation",
+    "id",
+    "image",
+    "locktransforms",
+    "model",
+    "name",
+    "origin",
+    "parallaxDepth",
+    "parent",
     "scale",
     "solid",
     "visible",
@@ -217,6 +237,11 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             PARTICLES
         } else if set("image") {
             IMAGE
+        } else if !["model", "text", "sound", "light"]
+            .iter()
+            .any(|key| set(key))
+        {
+            GROUP
         } else {
             continue;
         };
@@ -299,7 +324,7 @@ mod tests {
     fn what_isnt_understood_is_named() {
         let scene = json!({
             "general": {"bloom": true, "mystery": 1, "zoom": 2},
-            "objects": [{"image": "a.json", "parent": 3, "colorBlendMode": 9,
+            "objects": [{"image": "a.json", "wobble": 3, "colorBlendMode": 9,
                          "origin": {"value": "0 0 0", "animation": {"frames": []}}}]
         });
         let found = refusals(&scene);
@@ -307,7 +332,7 @@ mod tests {
             Missing::UnknownKey("general.mystery".into()),
             Missing::Setting("the scene's bloom"),
             Missing::Setting("camera zoom"),
-            Missing::UnknownKey("objects[0].parent".into()),
+            Missing::UnknownKey("objects[0].wobble".into()),
             Missing::Setting("colour blend modes"),
             Missing::Animated("objects[0].origin".into()),
         ] {

@@ -82,6 +82,24 @@ pub struct Texture {
 }
 
 impl Texture {
+    /// One white pixel standing for a picture of this size, for layers of a plain colour.
+    pub fn solid(width: u32, height: u32) -> Self {
+        Texture {
+            format: Format::Rgba8888,
+            flags: CLAMP_UVS,
+            width: 1,
+            height: 1,
+            image_width: width.clamp(1, MAX_DIMENSION),
+            image_height: height.clamp(1, MAX_DIMENSION),
+            images: vec![vec![Mip {
+                width: 1,
+                height: 1,
+                channels: Channels::Rgba,
+                pixels: vec![255; 4],
+            }]],
+        }
+    }
+
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
         Self::parse_with_budget(data, MAX_TEXTURE_BYTES)
     }

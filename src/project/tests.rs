@@ -814,3 +814,29 @@ fn a_stock_image_pass_with_render_state_draws_as_a_plain_layer() {
     assert!(layers[0].fragment.is_none());
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn a_flat_layer_is_its_colour_at_its_size() {
+    let folder = folder("flat");
+    std::fs::write(folder.join("project.json"), "{}").unwrap();
+    std::fs::write(folder.join("scene.json"), r#"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"image":"solid.json","size":"40 20","color":"1 0 0"}]}"#).unwrap();
+    std::fs::write(
+        folder.join("solid.json"),
+        r#"{"material":"flat.json","solidlayer":true}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("flat.json"),
+        r#"{"passes":[{"shader":"flat","blending":"translucent","cullmode":"nocull"}]}"#,
+    )
+    .unwrap();
+    let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
+    let layer = &prepared.layers[0];
+    assert_eq!(
+        (layer.texture.image_width, layer.texture.image_height),
+        (40, 20)
+    );
+    assert_eq!(layer.texture.images[0][0].pixels, [255; 4]);
+    assert_eq!(layer.image.color, [1.0, 0.0, 0.0]);
+    std::fs::remove_dir_all(folder).unwrap();
+}
