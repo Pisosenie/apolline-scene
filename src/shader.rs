@@ -1,0 +1,611 @@
+//! Preparation of the supported fragment-shader subset. No source is executed here.
+
+mod conditional;
+mod expression;
+mod parameters;
+mod samplers;
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Component, Path};
+use std::sync::Arc;
+
+use crate::Error;
+use serde_json::{Map, Value};
+
+const FILE_BYTES: usize = 256 * 1024;
+const TOTAL_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Fragment {
+    pub(crate) source: String,
+    pub(crate) texcoord: u8,
+    pub(crate) inputs: u8,
+    pub(crate) animated: bool,
+    bindings: Option<u8>,
+    pub(crate) files: Vec<String>,
+}
+
+impl Fragment {
+    pub(crate) fn validate_inputs(&self, bindings: u8) -> Result<(), Error> {
+        if bindings & 1 == 0 || self.inputs & !bindings != 0 {
+            return Err(fail("material does not bind all required texture slots"));
+        }
+        if self.bindings.is_some_and(|prepared| prepared != bindings) {
+            return Err(fail("texture bindings changed after fragment preparation"));
+        }
+        Ok(())
+    }
+
+    /// Prepares one fragment pass; time uniforms are supplied by the host. The loader only returns resources from its host.
+    pub fn prepare(
+        entry: &str,
+        combos: &Map<String, Value>,
+        constants: &Map<String, Value>,
+        load: impl FnMut(&str) -> Result<Option<String>, Error>,
+    ) -> Result<Self, Error> {
+        Self::prepare_inner(entry, combos, constants, None, load)
+    }
+
+    /// Prepares texture-driven combo options for an explicit mask of bound sampler slots.
+    pub fn prepare_bound(
+        entry: &str,
+        combos: &Map<String, Value>,
+        constants: &Map<String, Value>,
+        bindings: u8,
+        load: impl FnMut(&str) -> Result<Option<String>, Error>,
+    ) -> Result<Self, Error> {
+        if bindings & 1 == 0 {
+            return Err(fail("image materials require texture slot zero"));
+        }
+        Self::prepare_inner(entry, combos, constants, Some(bindings), load)
+    }
+
+    fn prepare_inner(
+        entry: &str,
+        combos: &Map<String, Value>,
+        constants: &Map<String, Value>,
+        bindings: Option<u8>,
+        load: impl FnMut(&str) -> Result<Option<String>, Error>,
+    ) -> Result<Self, Error> {
+        Template::load(entry, load)?.prepare(combos, constants, bindings)
+    }
+}
+
+pub(crate) struct Template {
+    output: String,
+    combos: BTreeMap<String, i32>,
+    files: Vec<String>,
+}
+
+impl Template {
+    pub(crate) fn load(
+        entry: &str,
+        load: impl FnMut(&str) -> Result<Option<String>, Error>,
+    ) -> Result<Self, Error> {
+        let entry = path("shaders", entry)?;
+        let mut expansion = Expansion {
+            load,
+            cache: HashMap::new(),
+            files: Vec::new(),
+            stack: Vec::new(),
+            inputs: 0,
+            includes: 0,
+            output: String::new(),
+            combos: BTreeMap::new(),
+        };
+        expansion.expand(&entry)?;
+        Ok(Self {
+            output: expansion.output,
+            combos: expansion.combos,
+            files: expansion.files,
+        })
+    }
+
+    pub(crate) fn fill_defaults(&self, names: &mut Vec<Option<String>>) -> Result<(), Error> {
+        samplers::fill_defaults(&self.output, names)
+    }
+
+    pub(crate) fn prepare(
+        self,
+        combos: &Map<String, Value>,
+        constants: &Map<String, Value>,
+        bindings: Option<u8>,
+    ) -> Result<Fragment, Error> {
+        if bindings.is_some_and(|mask| mask & 1 == 0) {
+            return Err(fail("image materials require texture slot zero"));
+        }
+        if combos.len() > 64
+            || combos
+                .keys()
+                .any(|name| !identifier(name) || protected(name))
+        {
+            return Err(fail("invalid or excessive material combo names"));
+        }
+        let mut expansion = self;
+        let optional = if let Some(bindings) = bindings {
+            Some(samplers::resolve(
+                &expansion.output,
+                bindings,
+                combos,
+                &mut expansion.combos,
+            )?)
+        } else {
+            None
+        };
+        for (name, value) in combos {
+            if optional
+                .as_ref()
+                .is_some_and(|options| options.controlled.contains(name))
+            {
+                continue;
+            }
+            if !expansion.combos.contains_key(name) {
+                return Err(fail(format!("unknown combo {name}")));
+            }
+            expansion.combos.insert(name.clone(), integer(value)?);
+        }
+        let mut blocked = false;
+        for line in expansion.output.lines() {
+            let visible = visible_line(line, &mut blocked);
+            let Some(directive) = visible.trim().strip_prefix('#').map(str::trim_start) else {
+                continue;
+            };
+            let (command, rest) = directive
+                .split_once(char::is_whitespace)
+                .unwrap_or((directive, ""));
+            if matches!(command, "define" | "undef") {
+                let name = rest
+                    .trim_start()
+                    .split(|character: char| character.is_whitespace() || character == '(')
+                    .next()
+                    .unwrap_or("");
+                if expansion.combos.contains_key(name)
+                    || protected(name)
+                    || optional
+                        .as_ref()
+                        .is_some_and(|options| options.controlled.contains(name))
+                {
+                    return Err(fail(format!(
+                        "shader redefines host-controlled macro {name}"
+                    )));
+                }
+            }
+        }
+        let selected = conditional::select(&expansion.output, &expansion.combos)?;
+        let (body, texcoord, inputs, animated) = parameters::bind(
+            &selected,
+            constants,
+            optional.as_ref().map(|options| options.missing),
+        )?;
+        let mut source = String::from(COMPATIBILITY);
+        for (name, value) in expansion.combos {
+            source.push_str(&format!("#define {name} {value}\n"));
+        }
+        source.push_str(&body);
+        source.push_str("\n#undef main\nvoid main() { apolline_effect_main(); apolline_effect_color *= apolline_layer_tint; }\n");
+        if source.len() > TOTAL_BYTES + 64 * 1024 {
+            return Err(fail("prepared source exceeds its budget"));
+        }
+        Ok(Fragment {
+            source,
+            texcoord,
+            inputs,
+            animated,
+            bindings,
+            files: expansion.files,
+        })
+    }
+}
+
+fn fail(message: impl std::fmt::Display) -> Error {
+    Error::Format(format!("fragment shader: {message}"))
+}
+
+fn protected(name: &str) -> bool {
+    name.starts_with("apolline_")
+        || name.starts_with("g_")
+        || name == "v_TexCoord"
+        || matches!(
+            name,
+            "defined"
+                | "main"
+                | "uniform"
+                | "varying"
+                | "gl_FragColor"
+                | "GLSL"
+                | "HLSL"
+                | "texSample2D"
+                | "texSample2DLod"
+                | "frac"
+                | "saturate"
+                | "atan2"
+                | "ddx"
+                | "ddy"
+                | "CAST2"
+                | "CAST3"
+                | "CAST4"
+                | "CAST3X3"
+        )
+}
+
+fn identifier(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with("gl_")
+        && !name.starts_with("apolline_")
+        && name.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphabetic() || byte == b'_' || (index > 0 && byte.is_ascii_digit())
+        })
+}
+
+fn integer(value: &Value) -> Result<i32, Error> {
+    let value = crate::value::plain(value);
+    value
+        .as_i64()
+        .and_then(|value| i32::try_from(value).ok())
+        .or_else(|| value.as_bool().map(i32::from))
+        .ok_or_else(|| fail("combo value must be a signed integer or boolean"))
+}
+
+fn path(parent: &str, name: &str) -> Result<String, Error> {
+    if name.len() > 4096
+        || name.is_empty()
+        || name.contains(['\\', ':', '\0'])
+        || Path::new(name).is_absolute()
+    {
+        return Err(fail("invalid shader resource path"));
+    }
+    let mut parts: Vec<_> = parent.split('/').collect();
+    for part in Path::new(name).components() {
+        match part {
+            Component::Normal(part) => {
+                parts.push(part.to_str().ok_or_else(|| fail("non-UTF-8 path"))?)
+            }
+            Component::CurDir => {}
+            Component::ParentDir if parts.len() > 1 => {
+                parts.pop();
+            }
+            _ => return Err(fail("include escapes the shaders directory")),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+struct Expansion<F> {
+    load: F,
+    cache: HashMap<String, Option<Arc<str>>>,
+    files: Vec<String>,
+    stack: Vec<String>,
+    inputs: usize,
+    includes: usize,
+    output: String,
+    combos: BTreeMap<String, i32>,
+}
+
+impl<F: FnMut(&str) -> Result<Option<String>, Error>> Expansion<F> {
+    fn read(&mut self, name: &str) -> Result<Option<Arc<str>>, Error> {
+        if let Some(source) = self.cache.get(name) {
+            return Ok(source.clone());
+        }
+        let source = (self.load)(name)?;
+        if let Some(source) = &source {
+            self.inputs += source.len();
+            if source.len() > FILE_BYTES || self.inputs > TOTAL_BYTES || self.files.len() >= 64 {
+                return Err(fail("source files exceed the preparation budget"));
+            }
+            self.files.push(name.to_owned());
+        }
+        let source = source.map(Arc::from);
+        self.cache.insert(name.to_owned(), source.clone());
+        Ok(source)
+    }
+
+    fn append(&mut self, text: &str) -> Result<(), Error> {
+        if text.len() > TOTAL_BYTES.saturating_sub(self.output.len()) {
+            return Err(fail("expanded source exceeds 1 MiB"));
+        }
+        self.output.push_str(text);
+        Ok(())
+    }
+
+    fn expand(&mut self, name: &str) -> Result<(), Error> {
+        if self.stack.len() >= 16 || self.stack.iter().any(|entry| entry == name) {
+            return Err(fail(format!("include cycle or depth limit at {name}")));
+        }
+        let source = self
+            .read(name)?
+            .ok_or_else(|| fail(format!("missing {name}")))?;
+        let id = self
+            .files
+            .iter()
+            .position(|entry| entry == name)
+            .unwrap_or(0)
+            + 1;
+        self.append(&format!("#line 1 {id}\n"))?;
+        self.stack.push(name.to_owned());
+        let parent = name
+            .rsplit_once('/')
+            .map_or("shaders", |(parent, _)| parent);
+        let mut blocked = false;
+        for (line, original) in source.lines().enumerate() {
+            if !blocked && let Some(annotation) = original.trim().strip_prefix("// [COMBO]") {
+                let annotation: Value = serde_json::from_str(annotation)
+                    .map_err(|error| fail(format!("{name}:{}: {error}", line + 1)))?;
+                let combo = annotation
+                    .get("combo")
+                    .and_then(Value::as_str)
+                    .filter(|name| identifier(name) && !protected(name))
+                    .ok_or_else(|| fail("invalid combo name"))?;
+                if self.combos.len() >= 64 {
+                    return Err(fail("more than 64 combos"));
+                }
+                let value = integer(
+                    annotation
+                        .get("default")
+                        .ok_or_else(|| fail("combo has no default"))?,
+                )?;
+                if self.combos.insert(combo.to_owned(), value).is_some() {
+                    return Err(fail(format!("duplicate combo {combo}")));
+                }
+            }
+            let visible = visible_line(original, &mut blocked);
+            let directive = visible.trim().strip_prefix('#').map(str::trim_start);
+            if let Some(directive) = directive {
+                let (command, rest) = directive
+                    .split_once(char::is_whitespace)
+                    .unwrap_or((directive, ""));
+                if matches!(command, "version" | "extension" | "line") {
+                    return Err(fail(format!(
+                        "{name}:{}: #{command} is supplied by the host",
+                        line + 1
+                    )));
+                }
+                if command == "include" {
+                    self.includes += 1;
+                    if self.includes > 256 {
+                        return Err(fail("more than 256 includes"));
+                    }
+                    let include = rest
+                        .trim()
+                        .strip_prefix('"')
+                        .and_then(|rest| rest.strip_suffix('"'))
+                        .ok_or_else(|| fail("include needs a quoted resource path"))?;
+                    let local = path(parent, include)?;
+                    let target = if self.read(&local)?.is_some() {
+                        local
+                    } else {
+                        path("shaders", include)?
+                    };
+                    self.expand(&target)?;
+                    self.append(&format!("#line {} {id}\n", line + 2))?;
+                    continue;
+                }
+            }
+            self.append(original)?;
+            self.append("\n")?;
+        }
+        if blocked {
+            return Err(fail(format!("{name}: unclosed block comment")));
+        }
+        self.stack.pop();
+        Ok(())
+    }
+}
+
+fn visible_line(line: &str, blocked: &mut bool) -> String {
+    let mut output = String::new();
+    let mut rest = line;
+    while !rest.is_empty() {
+        if *blocked {
+            if let Some(end) = rest.find("*/") {
+                rest = &rest[end + 2..];
+                *blocked = false;
+            } else {
+                break;
+            }
+        } else if let Some(start) = rest.find("/*") {
+            if let Some(comment) = rest.find("//").filter(|&comment| comment < start) {
+                output.push_str(&rest[..comment]);
+                break;
+            }
+            output.push_str(&rest[..start]);
+            output.push(' ');
+            rest = &rest[start + 2..];
+            *blocked = true;
+        } else {
+            output.push_str(rest.split_once("//").map_or(rest, |(before, _)| before));
+            break;
+        }
+    }
+    output
+}
+
+const COMPATIBILITY: &str = "\
+#define GLSL 1
+#define varying in
+#define texSample2D texture
+#define texSample2DLod textureLod
+#define frac fract
+#define saturate(x) clamp(x, 0.0, 1.0)
+#define atan2 atan
+#define ddx dFdx
+#define ddy dFdy
+#define CAST2(x) vec2(x)
+#define CAST3(x) vec3(x)
+#define CAST4(x) vec4(x)
+#define CAST3X3(x) mat3(x)
+#define main apolline_effect_main
+#define gl_FragColor apolline_effect_color
+out vec4 apolline_effect_color;
+uniform vec4 apolline_layer_tint;
+";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn prepare(source: &str, combos: Value, constants: Value) -> Result<Fragment, Error> {
+        Fragment::prepare(
+            "demo.frag",
+            combos.as_object().unwrap(),
+            constants.as_object().unwrap(),
+            |path| Ok((path == "shaders/demo.frag").then(|| source.to_owned())),
+        )
+    }
+
+    #[test]
+    fn all_declared_sampler_and_resolution_slots_must_be_bound() {
+        let fragment = prepare("uniform sampler2D g_Texture0;\nuniform sampler2D g_Texture1;\nuniform vec4 g_Texture7Resolution;\nvoid main() { gl_FragColor = vec4(1.0); }", json!({}), json!({})).unwrap();
+        assert!(fragment.validate_inputs(1).is_err());
+        assert!(fragment.validate_inputs(127).is_err());
+        assert!(fragment.validate_inputs(255).is_ok());
+        assert!(fragment.validate_inputs(0).is_err());
+    }
+
+    #[test]
+    fn includes_combos_and_numeric_constants_form_a_complete_static_shader() {
+        let source = "// [COMBO] {\"combo\":\"GRAY\",\"default\":0}\n#include \"tone.h\"\nvarying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nuniform float u_Amount; // {\"material\":\"amount\",\"default\":1}\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * u_Amount; }";
+        let fragment = Fragment::prepare(
+            "demo.frag",
+            json!({"GRAY":1}).as_object().unwrap(),
+            json!({"amount":0.5}).as_object().unwrap(),
+            |path| {
+                Ok(match path {
+                    "shaders/demo.frag" => Some(source.into()),
+                    "shaders/tone.h" => {
+                        Some("float half_value(float value) { return value * 0.5; }".into())
+                    }
+                    _ => None,
+                })
+            },
+        )
+        .unwrap();
+        assert!(fragment.source.contains("#define GRAY 1"));
+        assert!(
+            fragment
+                .source
+                .contains("const float u_Amount = 5.000000000e-1;")
+        );
+        assert!(fragment.source.contains("float half_value"));
+        assert!(!fragment.source.contains("#include"));
+        assert_eq!(fragment.texcoord, 2);
+        assert_eq!(fragment.files, ["shaders/demo.frag", "shaders/tone.h"]);
+    }
+
+    #[test]
+    fn include_cycles_missing_sources_and_escape_attempts_are_errors() {
+        for source in [
+            "#include \"demo.frag\"",
+            "#include \"missing.h\"",
+            "#include \"../outside.h\"",
+        ] {
+            assert!(prepare(source, json!({}), json!({})).is_err());
+        }
+        assert!(prepare("#version 330", json!({}), json!({})).is_err());
+        assert!(prepare("#define main replacement", json!({}), json!({})).is_err());
+        assert!(prepare("/* unclosed", json!({}), json!({})).is_err());
+    }
+
+    #[test]
+    fn comments_do_not_trigger_includes_or_uniforms() {
+        let fragment = prepare("/*\n#include \"missing.h\"\nuniform float g_Time;\n*/\n// uniform sampler2D g_Texture1;\nvoid main() { gl_FragColor = vec4(1.0); }", json!({}), json!({})).unwrap();
+        assert_eq!(fragment.files.len(), 1);
+    }
+
+    #[test]
+    fn unsupported_dynamic_inputs_and_ignored_parameters_are_refused() {
+        for declaration in [
+            "uniform float g_Daytime;",
+            "uniform sampler2D g_Texture8;",
+            "uniform sampler2D g_Texture0; // {\"combo\":\"MASK\"}",
+            "varying vec2 customUV;",
+            "uniform float values[4];",
+        ] {
+            assert!(prepare(declaration, json!({}), json!({})).is_err());
+        }
+        assert!(prepare("void main() {}", json!({"UNKNOWN":1}), json!({})).is_err());
+        assert!(prepare("void main() {}", json!({}), json!({"ignored":1})).is_err());
+        assert!(prepare("uniform float amount;", json!({}), json!({"amount":"nan"})).is_err());
+        assert!(prepare("uniform vec3 color;", json!({}), json!({"color":[1,2]})).is_err());
+    }
+
+    #[test]
+    fn only_selected_declarations_contribute_uniforms_and_texture_slots() {
+        let source = "// [COMBO] {\"combo\":\"LIVE\",\"default\":0}\n#if LIVE\nuniform float g_Daytime;\n#else\nvarying vec4 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy); }\n#endif\n#if 0\nuniform sampler2D g_Texture7;\ninvalid syntax $ ! ;\n#endif";
+        let selected = prepare(source, json!({}), json!({})).unwrap();
+        assert_eq!(selected.texcoord, 4);
+        assert!(selected.validate_inputs(1).is_ok());
+        assert!(!selected.source.contains("g_Daytime"));
+        assert!(!selected.source.contains("g_Texture7"));
+        assert!(prepare(source, json!({"LIVE":1}), json!({})).is_err());
+        // Explicit unused values remain errors, including values for an inactive branch.
+        assert!(prepare(source, json!({}), json!({"amount":0.5})).is_err());
+    }
+
+    #[test]
+    fn engine_uniforms_and_compatibility_macros_cannot_be_aliased() {
+        for name in [
+            "g_Texture0",
+            "g_Texture0Resolution",
+            "v_TexCoord",
+            "atan2",
+            "defined",
+        ] {
+            assert!(
+                prepare(
+                    &format!("#define {name} other\nvoid main() {{}}"),
+                    json!({}),
+                    json!({})
+                )
+                .is_err()
+            );
+            assert!(
+                prepare(
+                    &format!("// [COMBO] {{\"combo\":\"{name}\",\"default\":1}}\nvoid main() {{}}"),
+                    json!({}),
+                    json!({})
+                )
+                .is_err()
+            );
+        }
+        assert!(prepare("#line 1 99\nvoid main() {}", json!({}), json!({})).is_err());
+    }
+
+    #[test]
+    fn framebuffer_constants_are_supported_with_exact_types() {
+        let supported = "uniform vec3 g_Screen;\nuniform vec2 g_TexelSize;\nuniform vec2 g_TexelSizeHalf;\nvoid main() { gl_FragColor = vec4(g_TexelSize, g_TexelSizeHalf.x, g_Screen.z); }";
+        assert!(prepare(supported, json!({}), json!({})).is_ok());
+        for declaration in [
+            "uniform vec2 g_Screen;",
+            "uniform float g_TexelSize;",
+            "uniform vec3 g_TexelSizeHalf;",
+        ] {
+            assert!(prepare(declaration, json!({}), json!({})).is_err());
+        }
+    }
+
+    #[test]
+    fn metadata_defaults_are_not_changed_by_material_values_from_other_preparations() {
+        let source = "uniform vec3 u_Color; // {\"material\":\"color\",\"default\":\"1 0 0\"}\nvoid main() { gl_FragColor = vec4(u_Color, 1.0); }";
+        let default = prepare(source, json!({}), json!({})).unwrap();
+        let edited = prepare(source, json!({}), json!({"color":"0 1 0"})).unwrap();
+        assert_ne!(default.source, edited.source);
+        assert_eq!(prepare(source, json!({}), json!({})).unwrap(), default);
+    }
+
+    #[test]
+    fn repeated_includes_cannot_expand_without_a_bound() {
+        let source = "#include \"large.h\"\n".repeat(80);
+        let result = Fragment::prepare("demo.frag", &Map::new(), &Map::new(), |path| {
+            Ok(match path {
+                "shaders/demo.frag" => Some(source.clone()),
+                "shaders/large.h" => Some(" ".repeat(20000)),
+                _ => None,
+            })
+        });
+        assert!(result.err().unwrap().to_string().contains("1 MiB"));
+        let oversized = " ".repeat(FILE_BYTES + 1);
+        assert!(prepare(&oversized, json!({}), json!({})).is_err());
+    }
+}

@@ -49,11 +49,5 @@ The same rules as apolline-wall's `AGENTS.md`, which has them in full: work as a
 
 ## Where things stand
 
-Stages 1 and 2 are done: files read, still scenes drawn with layers, blending and parallax, and the viewer. The last commit is `a699dd8`, not pushed yet.
-
-Not one real Wallpaper Engine file has been read. Until a machine with Wallpaper Engine installed through Steam is at hand, these are guesses to check first: the package and texture layouts, y going up from the bottom in scene coordinates, angles in radians, `normal` blending meaning opaque, the parallax strength. The animation frames in `TEXS` aren't read.
-
-Next, from `docs/PLAN.md`:
-3. Effects: Wallpaper Engine's GLSL dialect (`#include`, combos, annotated uniforms) translated to GLES 3, the common ones first (water ripple, shake, scroll, bloom, blur, tint, opacity masks), each pass rendering into textures.
-4. Particles. 5. Puppet warp (`.mdl` skeletons). 6. SceneScript (JavaScript). 7. User properties, audio, the cursor.
-Then into apolline-wall: the daemon draws scenes with this library in its own context, so they get crossfades, looks, pause and fps limits, and only what `Scene::missing` lists still goes to linux-wallpaperengine.
+`docs/PLAN.md`, section "Now", is the current state and the known gaps; keep it true when the
+code changes, as a short list rather than a log.

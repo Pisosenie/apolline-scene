@@ -59,6 +59,13 @@ impl Scene {
     pub fn parse(json: &str) -> Result<Self, Error> {
         let root: Value = serde_json::from_str(json)
             .map_err(|err| Error::Format(format!("scene.json: {err}")))?;
+        Self::from_value(&root)
+    }
+
+    pub(crate) fn from_value(root: &Value) -> Result<Self, Error> {
+        if !root.is_object() {
+            return Err(Error::Format("scene.json must contain an object".into()));
+        }
         let general = root.get("general");
         let field = |name: &str| general.and_then(|general| general.get(name));
         let projection = field("orthogonalprojection").filter(|p| p.is_object());
@@ -110,6 +117,7 @@ impl Scene {
                 Object::Image(image) if image.effects > 0 => note("effects"),
                 Object::Particles(_) => note("particles"),
                 Object::Light => note("lights"),
+                Object::Other => note("unknown objects"),
                 _ => {}
             }
         }

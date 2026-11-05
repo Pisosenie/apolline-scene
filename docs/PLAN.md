@@ -42,14 +42,37 @@ A scene that uses something not done yet goes on falling back to `linux-wallpape
 
 ## Now
 
-Stages 1 and 2 are written, with a viewer (`examples/view.rs`) that can also save one frame
-off screen, the start of the corpus comparison. Everything is tested on files built in the
-tests and a synthetic scene drawn on macOS's OpenGL. Not one real `scene.pkg`, `.tex` or
-`scene.json` has been read yet, so these are still guesses until then:
-- y going up from the bottom in scene coordinates, and angles in radians;
-- `normal` blending meaning opaque;
-- how far the parallax moves, which is tuned by eye later;
-- the animation frames of `TEXS` textures, not read yet.
+Written and tested on files built in the tests and on macOS's desktop OpenGL; not one real
+Wallpaper Engine file has been read yet.
 
-That needs a machine with Wallpaper Engine installed through Steam, and is the first thing to
-do there.
+- Stages 1 and 2: packages and textures with bounds on every size, still scenes with layers,
+  blending and parallax, the viewer and its `--shot`.
+- User properties: bool, slider, colour, combo and text, bound into the scene. A property
+  described in a way it can't be edited stays read-only, and a saved edit that no longer fits
+  gives way to the default, so neither keeps a scene from loading.
+- The start of stage 3: one-pass fragment materials. Includes, combos and `#if` conditions
+  with a bounded expression evaluator, numeric constants, up to eight texture inputs (R8 and
+  RG8 too), optional samplers and default textures, `g_Time` and `g_Frametime`, and one cached
+  program per material. Stock materials with `cullmode`, `depthtest` and `depthwrite`, and
+  `genericimage2`, draw as plain layers. A material's own vertex shader gives way to ours as
+  long as its fragment wants only the layer's coordinates.
+- apolline-wall draws the scenes this covers with `Project::prepare` and flattens still ones
+  once; everything else still goes to linux-wallpaperengine.
+
+Guesses to check on real files first: y going up in scene coordinates and angles in radians,
+`normal` blending meaning opaque, the parallax strength, and the frames of `TEXS` textures,
+which aren't read.
+
+Known gaps in the material path, from review:
+- Sampler defaults are looked up before `#if` branches are chosen, so an inactive branch's
+  default can still refuse a material.
+- GLSL ES 3.00 is stricter than desktop GL 3.3 about implicit int-to-float conversion, and
+  nothing has run on GLES yet; `mul`, `lerp` and `fmod` have no aliases, and helpers with `out`
+  parameters are refused.
+- `{"user": {"name", "condition"}}` bindings keep their stored value instead of following the
+  property.
+- A `vec4 v_TexCoord` gets zeros in `zw`, `g_Color` and `g_Alpha` are always 1 with the tint
+  applied after, and `g_TexelSize` follows the framebuffer rather than the layer.
+
+The shader-language aliases (`texSample2D`, `frac`, `saturate` and the rest) are named after
+what Wallpaper Engine's own shipped shaders use, which any renderer of them has to accept.

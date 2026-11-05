@@ -2,18 +2,24 @@
 //! on its own: any program with a GL context can draw a scene with it.
 
 pub mod dxt;
+mod files;
 pub mod pkg;
 pub mod project;
+pub mod properties;
 pub mod render;
 pub mod scene;
+pub mod shader;
 pub mod tex;
 mod value;
 
-pub use project::{Blending, Layer, Project};
+pub use project::{Blending, Layer, Prepared, Project, TextureInput};
 pub use render::Renderer;
 pub use scene::Scene;
 
 use std::fmt;
+
+/// A decoded texture, including all its frames and mipmaps, may use at most 256 MiB.
+pub const MAX_TEXTURE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Error {
@@ -69,21 +75,52 @@ impl<'a> Reader<'a> {
         self.u32().map(|n| n as i32)
     }
 
-    /// A string prefixed with its length.
-    pub fn string(&mut self) -> Result<String, Error> {
+    /// A bounded UTF-8 string prefixed with its byte length.
+    pub fn string(&mut self, limit: usize) -> Result<String, Error> {
         let len = self.u32()? as usize;
-        Ok(String::from_utf8_lossy(self.bytes(len)?).into_owned())
+        if len > limit {
+            return Err(Error::Format(format!("string exceeds {limit} bytes")));
+        }
+        let bytes = self.bytes(len)?;
+        std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|_| Error::Format("a package string is not UTF-8".into()))
     }
 
-    /// A tag ending in a zero byte, like `TEXV0005`.
+    /// An eight-byte texture tag followed by a zero byte, like `TEXV0005`.
     pub fn tag(&mut self) -> Result<String, Error> {
-        let rest = &self.data[self.at.min(self.data.len())..];
-        let len = rest
-            .iter()
-            .position(|&byte| byte == 0)
-            .ok_or_else(|| Error::Format(format!("no tag at byte {}", self.at)))?;
-        let tag = String::from_utf8_lossy(&rest[..len]).into_owned();
-        self.at += len + 1;
-        Ok(tag)
+        let bytes = self.bytes(9)?;
+        if bytes[8] != 0 || !bytes[..8].is_ascii() || bytes[..8].contains(&0) {
+            return Err(Error::Format(
+                "a texture tag must contain eight ASCII bytes and a terminator".into(),
+            ));
+        }
+        String::from_utf8(bytes[..8].to_vec())
+            .map_err(|_| Error::Format("invalid texture tag".into()))
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+    #[test]
+    fn oversized_tags_and_strings_are_rejected_before_copying_their_contents() {
+        let mut data = vec![b'x'; 1024 * 1024];
+        data.push(0);
+        let mut reader = Reader::new(&data);
+        assert!(reader.tag().is_err());
+        assert_eq!(reader.position(), 9);
+        let mut reader = Reader::new(&[255, 255, 255, 255]);
+        assert!(
+            reader
+                .string(4096)
+                .unwrap_err()
+                .to_string()
+                .contains("4096")
+        );
+        assert_eq!(reader.position(), 4);
+        assert_eq!(Reader::new(b"TEXV0005\0").tag().unwrap(), "TEXV0005");
+        assert!(Reader::new(b"TEXV\x00005\0").tag().is_err());
+        assert!(Reader::new(&[1, 0, 0, 0, 255]).string(4096).is_err());
     }
 }

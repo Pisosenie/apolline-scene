@@ -18,22 +18,24 @@ impl Kind {
 }
 
 /// The bytes a `width` × `height` image takes in 4×4 blocks.
-pub fn size(kind: Kind, width: usize, height: usize) -> usize {
-    width.div_ceil(4) * height.div_ceil(4) * kind.block_bytes()
+pub fn size(kind: Kind, width: usize, height: usize) -> Option<usize> {
+    width
+        .div_ceil(4)
+        .checked_mul(height.div_ceil(4))?
+        .checked_mul(kind.block_bytes())
 }
 
-/// Decodes a whole image; `None` if `data` is shorter than the image needs.
+/// Decodes a whole image; refuses empty, truncated or oversized images.
 pub fn decode(kind: Kind, data: &[u8], width: usize, height: usize) -> Option<Vec<u8>> {
-    if data.len() < size(kind, width, height) {
+    let stored = size(kind, width, height)?;
+    let bytes = width.checked_mul(height)?.checked_mul(4)?;
+    if bytes == 0 || bytes > crate::MAX_TEXTURE_BYTES || data.len() < stored {
         return None;
     }
-    let mut out = vec![0u8; width * height * 4];
+    let mut out = vec![0u8; bytes];
     let blocks = data.chunks_exact(kind.block_bytes());
     let across = width.div_ceil(4);
-    for (index, block) in blocks
-        .take(size(kind, width, height) / kind.block_bytes())
-        .enumerate()
-    {
+    for (index, block) in blocks.take(stored / kind.block_bytes()).enumerate() {
         let (bx, by) = (index % across * 4, index / across * 4);
         let pixels = match kind {
             Kind::Dxt1 => colours(block, true),
@@ -165,6 +167,14 @@ mod tests {
         let block = [0xff, 0xff, 0x00, 0x00, 0, 0, 0, 0];
         assert_eq!(decode(Kind::Dxt1, &block, 3, 2).unwrap().len(), 3 * 2 * 4);
         assert_eq!(decode(Kind::Dxt1, &block[..7], 4, 4), None);
-        assert_eq!(size(Kind::Dxt5, 5, 5), 4 * 16);
+        assert_eq!(size(Kind::Dxt5, 5, 5), Some(4 * 16));
+    }
+
+    #[test]
+    fn impossible_dimensions_do_not_allocate_or_overflow() {
+        for (w, h) in [(0, 4), (4, 0), (usize::MAX, usize::MAX), (usize::MAX, 1)] {
+            assert!(decode(Kind::Dxt5, &[0; 16], w, h).is_none());
+        }
+        assert_eq!(size(Kind::Dxt5, usize::MAX, usize::MAX), None);
     }
 }

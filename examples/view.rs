@@ -25,10 +25,15 @@ use winit::window::{Window, WindowId};
 struct View {
     project: PathBuf,
     assets: Option<PathBuf>,
+    properties: Option<PathBuf>,
     shot: Option<PathBuf>,
+    shot_size: (u32, u32),
+    shot_time: f32,
     open: Option<Open>,
     pointer: [f32; 2],
     last: Instant,
+    failed: bool,
+    stats: bool,
 }
 
 struct Open {
@@ -37,10 +42,59 @@ struct Open {
     context: PossiblyCurrentContext,
     gl: glow::Context,
     renderer: Renderer,
+    started: Instant,
 }
 
 fn main() {
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    let stats = args
+        .iter()
+        .position(|arg| arg == "--stats")
+        .map(|at| args.remove(at))
+        .is_some();
+    let shot_time = match args.iter().position(|arg| arg == "--time") {
+        Some(at) => {
+            let value = args
+                .get(at + 1)
+                .and_then(|value| value.to_str())
+                .and_then(|value| value.parse::<f32>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0);
+            let Some(value) = value else {
+                eprintln!("view: --time needs a finite nonnegative number of seconds");
+                std::process::exit(2);
+            };
+            args.remove(at + 1);
+            args.remove(at);
+            value
+        }
+        None => 0.0,
+    };
+    let shot_size = match args.iter().position(|arg| arg == "--shot-size") {
+        Some(at) => {
+            let parsed = args
+                .get(at + 1)
+                .and_then(|value| value.to_str())
+                .and_then(shot_size);
+            let Some(size) = parsed else {
+                eprintln!(
+                    "view: --shot-size needs WIDTHxHEIGHT, dimensions 1–16384, at most 16 megapixels"
+                );
+                std::process::exit(2);
+            };
+            args.remove(at + 1);
+            args.remove(at);
+            size
+        }
+        None => (1280, 720),
+    };
+    let properties = match args.iter().position(|arg| arg == "--properties") {
+        Some(at) if at + 1 < args.len() => {
+            let path = args.remove(at + 1);
+            args.remove(at);
+            Some(PathBuf::from(path))
+        }
+        _ => None,
+    };
     let shot = match args.iter().position(|arg| arg == "--shot") {
         Some(at) if at + 1 < args.len() => {
             let path = args.remove(at + 1);
@@ -51,16 +105,23 @@ fn main() {
     };
     let mut args = args.into_iter();
     let Some(project) = args.next() else {
-        eprintln!("usage: view [--shot out.png] <project folder> [assets folder]");
+        eprintln!(
+            "usage: view [--stats] [--shot out.png] [--shot-size WIDTHxHEIGHT] [--time SECONDS] [--properties values.json] <project folder> [assets folder]"
+        );
         std::process::exit(2);
     };
     let mut view = View {
+        properties,
         project: project.into(),
         assets: args.next().map(PathBuf::from),
         shot,
+        shot_size,
+        shot_time,
         open: None,
         pointer: [0.0; 2],
         last: Instant::now(),
+        failed: false,
+        stats,
     };
     let ran = EventLoop::new()
         .map_err(|err| err.to_string())
@@ -69,20 +130,50 @@ fn main() {
         eprintln!("view: {err}");
         std::process::exit(1);
     }
+    if view.failed {
+        std::process::exit(1);
+    }
 }
 
 impl View {
     fn open(&self, event_loop: &ActiveEventLoop) -> Result<Open, String> {
-        let project =
+        let mut project =
             Project::open(&self.project, self.assets.as_deref()).map_err(|err| err.to_string())?;
-        let scene = project.scene().map_err(|err| err.to_string())?;
-        let (layers, skipped) = project.layers(&scene);
+        if let Some(path) = &self.properties {
+            use std::io::Read;
+            let file = std::fs::File::open(path).map_err(|err| err.to_string())?;
+            let mut bytes = Vec::new();
+            file.take(1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|err| err.to_string())?;
+            if bytes.len() > 1024 * 1024 {
+                return Err("property overrides exceed 1 MiB".into());
+            }
+            let values = serde_json::from_slice(&bytes)
+                .map_err(|err| format!("{}: {err}", path.display()))?;
+            project
+                .set_properties(&values)
+                .map_err(|err| err.to_string())?;
+        }
+        let (scene, layers, skipped) = if self.shot.is_some() {
+            let prepared = project
+                .prepare_snapshot()
+                .map_err(|error| error.to_string())?;
+            (prepared.scene, prepared.layers, Vec::new())
+        } else {
+            let scene = project.scene().map_err(|error| error.to_string())?;
+            let (layers, skipped) = project.layers(&scene);
+            (scene, layers, skipped)
+        };
         for layer in &skipped {
             eprintln!("view: left out {layer}");
         }
         let missing = scene.missing();
         if !missing.is_empty() {
             eprintln!("view: not drawn yet: {}", missing.join(", "));
+        }
+        if self.shot.is_some() && (!skipped.is_empty() || !missing.is_empty()) {
+            return Err("refusing a partial scene screenshot; resolve the reported unsupported resources first".into());
         }
         let title = if project.title.is_empty() {
             "Scene"
@@ -141,12 +232,21 @@ impl View {
         };
         let renderer =
             unsafe { Renderer::new(&gl, &scene, &layers) }.map_err(|err| err.to_string())?;
+        if self.stats {
+            eprintln!(
+                "view: {} texture uploads, {} logical texture bytes, animated={}",
+                renderer.texture_count(),
+                renderer.texture_bytes(),
+                renderer.animated()
+            );
+        }
         Ok(Open {
             window,
             surface,
             context,
             gl,
             renderer,
+            started: Instant::now(),
         })
     }
 }
@@ -158,9 +258,13 @@ impl ApplicationHandler for View {
         }
         match self.open(event_loop) {
             Ok(open) if self.shot.is_some() => {
-                let saved = self.shot.as_deref().map(|path| shoot(&open, path));
+                let saved = self
+                    .shot
+                    .as_deref()
+                    .map(|path| shoot(&open, path, self.shot_size, self.shot_time));
                 if let Some(Err(err)) = saved {
                     eprintln!("view: {err}");
+                    self.failed = true;
                 }
                 unsafe { open.renderer.delete(&open.gl) };
                 event_loop.exit();
@@ -168,6 +272,7 @@ impl ApplicationHandler for View {
             Ok(open) => self.open = Some(open),
             Err(err) => {
                 eprintln!("view: {err}");
+                self.failed = true;
                 event_loop.exit();
             }
         }
@@ -201,9 +306,17 @@ impl ApplicationHandler for View {
                 self.last = now;
                 let moving = open.renderer.follow(self.pointer, seconds);
                 let size = open.window.inner_size();
-                unsafe { open.renderer.draw(&open.gl, (size.width, size.height)) };
+                unsafe {
+                    open.renderer.draw_timed(
+                        &open.gl,
+                        (size.width, size.height),
+                        apolline_scene::render::Fit::Cover,
+                        open.started.elapsed().as_secs_f32(),
+                        seconds.min(0.25),
+                    )
+                };
                 let _ = open.surface.swap_buffers(&open.context);
-                if moving {
+                if moving || open.renderer.animated() {
                     open.window.request_redraw();
                 }
             }
@@ -218,15 +331,33 @@ impl ApplicationHandler for View {
     }
 }
 
+fn shot_size(value: &str) -> Option<(u32, u32)> {
+    let (width, height) = value.split_once('x')?;
+    let size: (u32, u32) = (width.parse().ok()?, height.parse().ok()?);
+    ((1..=16384).contains(&size.0)
+        && (1..=16384).contains(&size.1)
+        && u64::from(size.0) * u64::from(size.1) <= 16 * 1024 * 1024)
+        .then_some(size)
+}
+
 /// One frame drawn into an offscreen framebuffer and saved as a PNG, whatever the window.
-fn shoot(open: &Open, path: &std::path::Path) -> Result<(), String> {
+fn shoot(open: &Open, path: &std::path::Path, (w, h): (u32, u32), time: f32) -> Result<(), String> {
     use glow::HasContext;
-    let (w, h) = (1280u32, 720u32);
     let gl = &open.gl;
-    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    let mut pixels = vec![0u8; w as usize * h as usize * 4];
     unsafe {
+        let max = gl.get_parameter_i32(glow::MAX_RENDERBUFFER_SIZE).max(0) as u32;
+        if w > max || h > max {
+            return Err(format!("screenshot dimensions exceed the GL limit {max}"));
+        }
         let framebuffer = gl.create_framebuffer()?;
-        let colour = gl.create_renderbuffer()?;
+        let colour = match gl.create_renderbuffer() {
+            Ok(colour) => colour,
+            Err(error) => {
+                gl.delete_framebuffer(framebuffer);
+                return Err(error);
+            }
+        };
         gl.bind_renderbuffer(glow::RENDERBUFFER, Some(colour));
         gl.renderbuffer_storage(glow::RENDERBUFFER, glow::RGBA8, w as i32, h as i32);
         gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
@@ -236,29 +367,71 @@ fn shoot(open: &Open, path: &std::path::Path) -> Result<(), String> {
             glow::RENDERBUFFER,
             Some(colour),
         );
-        open.renderer.draw(gl, (w, h));
-        gl.read_pixels(
-            0,
-            0,
-            w as i32,
-            h as i32,
-            glow::RGBA,
-            glow::UNSIGNED_BYTE,
-            glow::PixelPackData::Slice(Some(&mut pixels)),
-        );
+        let result = (|| {
+            let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
+            if status != glow::FRAMEBUFFER_COMPLETE {
+                return Err(format!(
+                    "incomplete screenshot framebuffer (GL {status:#x})"
+                ));
+            }
+            open.renderer
+                .draw_timed(gl, (w, h), apolline_scene::render::Fit::Cover, time, 0.0);
+            gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+            gl.pixel_store_i32(glow::PACK_ROW_LENGTH, 0);
+            gl.pixel_store_i32(glow::PACK_SKIP_ROWS, 0);
+            gl.pixel_store_i32(glow::PACK_SKIP_PIXELS, 0);
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            gl.read_pixels(
+                0,
+                0,
+                w as i32,
+                h as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixels)),
+            );
+            let error = gl.get_error();
+            if error != glow::NO_ERROR {
+                return Err(format!("drawing the screenshot failed (GL {error:#x})"));
+            }
+            Ok(())
+        })();
         gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        gl.bind_renderbuffer(glow::RENDERBUFFER, None);
         gl.delete_framebuffer(framebuffer);
         gl.delete_renderbuffer(colour);
+        result?;
     }
-    // GL reads rows from the bottom up.
-    let rows: Vec<u8> = pixels
-        .chunks_exact((w * 4) as usize)
-        .rev()
-        .flatten()
-        .copied()
-        .collect();
-    image::RgbaImage::from_raw(w, h, rows)
+    // Reverse rows in place; a second full frame would double readback memory.
+    let stride = w as usize * 4;
+    for row in 0..h as usize / 2 {
+        let (head, tail) = pixels.split_at_mut((h as usize - row - 1) * stride);
+        head[row * stride..(row + 1) * stride].swap_with_slice(&mut tail[..stride]);
+    }
+    image::RgbaImage::from_raw(w, h, pixels)
         .ok_or("a frame of the wrong size")?
         .save(path)
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shot_size;
+
+    #[test]
+    fn screenshot_dimensions_bound_both_axes_and_total_allocation() {
+        for text in [
+            "0x1",
+            "1x0",
+            "16385x1",
+            "8192x8192",
+            "4294967295x4294967295",
+            "1280",
+            "-1x720",
+        ] {
+            assert_eq!(shot_size(text), None, "{text}");
+        }
+        assert_eq!(shot_size("1280x720"), Some((1280, 720)));
+        assert_eq!(shot_size("16384x1024"), Some((16384, 1024)));
+    }
 }

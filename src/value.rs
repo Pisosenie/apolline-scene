@@ -18,6 +18,7 @@ pub fn number(value: Option<&Value>) -> Option<f32> {
         Value::Bool(on) => Some(if *on { 1.0 } else { 0.0 }),
         _ => None,
     }
+    .filter(|n| n.is_finite())
 }
 
 pub fn flag(value: Option<&Value>) -> Option<bool> {
@@ -39,16 +40,34 @@ pub fn text(value: Option<&Value>) -> Option<&str> {
 
 /// `"x y z"`, or an array of numbers, filled out with `fill` where it falls short.
 pub fn vector<const N: usize>(value: Option<&Value>, fill: [f32; N]) -> [f32; N] {
-    let numbers: Vec<f32> = match value.map(plain) {
-        Some(Value::String(text)) => text
-            .split_whitespace()
-            .filter_map(|n| n.parse().ok())
-            .collect(),
-        Some(Value::Array(items)) => items.iter().filter_map(|n| number(Some(n))).collect(),
-        Some(Value::Number(n)) => n.as_f64().map(|n| vec![n as f32]).unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    std::array::from_fn(|at| numbers.get(at).copied().unwrap_or(fill[at]))
+    let mut out = fill;
+    match value.map(plain) {
+        Some(Value::String(text)) => {
+            for (slot, text) in out.iter_mut().zip(text.split_whitespace()) {
+                if let Ok(n) = text.parse::<f32>()
+                    && n.is_finite()
+                {
+                    *slot = n;
+                }
+            }
+        }
+        Some(Value::Array(items)) => {
+            for (slot, value) in out.iter_mut().zip(items) {
+                if let Some(n) = number(Some(value)) {
+                    *slot = n;
+                }
+            }
+        }
+        Some(value) => {
+            if let Some(slot) = out.first_mut()
+                && let Some(n) = number(Some(value))
+            {
+                *slot = n;
+            }
+        }
+        None => {}
+    }
+    out
 }
 
 #[cfg(test)]
@@ -90,5 +109,19 @@ mod tests {
         assert_eq!(flag(Some(&json!(1))), Some(true));
         assert_eq!(text(Some(&json!("models/a.json"))), Some("models/a.json"));
         assert_eq!(number(None), None);
+    }
+
+    #[test]
+    fn invalid_components_keep_their_position_and_never_reach_gl() {
+        assert_eq!(vector(Some(&json!("1 NaN 3")), [0.0; 3]), [1.0, 0.0, 3.0]);
+        assert_eq!(
+            vector(Some(&json!([1, "oops", 3])), [0.0; 3]),
+            [1.0, 0.0, 3.0]
+        );
+        assert_eq!(vector(Some(&json!("inf -inf 1e100")), [2.0; 3]), [2.0; 3]);
+        for value in [json!("NaN"), json!("inf"), json!(1e100)] {
+            assert_eq!(number(Some(&value)), None);
+        }
+        assert!(vector::<0>(Some(&json!(4)), []).is_empty());
     }
 }
