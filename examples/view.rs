@@ -34,6 +34,8 @@ struct View {
     last: Instant,
     failed: bool,
     stats: bool,
+    /// A screenshot of whatever layers can be drawn, for looking at scenes not drawn whole.
+    partial: bool,
 }
 
 struct Open {
@@ -50,6 +52,11 @@ fn main() {
     let stats = args
         .iter()
         .position(|arg| arg == "--stats")
+        .map(|at| args.remove(at))
+        .is_some();
+    let partial = args
+        .iter()
+        .position(|arg| arg == "--partial")
         .map(|at| args.remove(at))
         .is_some();
     let shot_time = match args.iter().position(|arg| arg == "--time") {
@@ -106,7 +113,7 @@ fn main() {
     let mut args = args.into_iter();
     let Some(project) = args.next() else {
         eprintln!(
-            "usage: view [--stats] [--shot out.png] [--shot-size WIDTHxHEIGHT] [--time SECONDS] [--properties values.json] <project folder> [assets folder]"
+            "usage: view [--stats] [--shot out.png] [--partial] [--shot-size WIDTHxHEIGHT] [--time SECONDS] [--properties values.json] <project folder> [assets folder]"
         );
         std::process::exit(2);
     };
@@ -122,6 +129,7 @@ fn main() {
         last: Instant::now(),
         failed: false,
         stats,
+        partial,
     };
     let ran = EventLoop::new()
         .map_err(|err| err.to_string())
@@ -155,7 +163,7 @@ impl View {
                 .set_properties(&values)
                 .map_err(|err| err.to_string())?;
         }
-        let (scene, layers, skipped) = if self.shot.is_some() {
+        let (scene, layers, skipped) = if self.shot.is_some() && !self.partial {
             let prepared = project
                 .prepare_snapshot()
                 .map_err(|error| error.to_string())?;
@@ -173,7 +181,7 @@ impl View {
             let named: Vec<String> = missing.iter().map(ToString::to_string).collect();
             eprintln!("view: not drawn yet: {}", named.join(", "));
         }
-        if self.shot.is_some() && (!skipped.is_empty() || !missing.is_empty()) {
+        if self.shot.is_some() && !self.partial && (!skipped.is_empty() || !missing.is_empty()) {
             return Err("refusing a partial scene screenshot; resolve the reported unsupported resources first".into());
         }
         let title = if project.title.is_empty() {

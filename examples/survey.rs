@@ -31,7 +31,21 @@ struct Survey {
     words: BTreeMap<&'static str, BTreeMap<String, usize>>,
     textures: BTreeMap<String, usize>,
     models: BTreeMap<String, usize>,
+    /// Why layers are left out, in layers and in scenes.
+    layers: BTreeMap<String, (usize, usize)>,
+    /// Values of plain settings: booleans, numbers and a few named choices.
+    values: BTreeMap<String, BTreeMap<String, usize>>,
 }
+
+/// String settings whose values are a fixed choice, not content.
+const CHOICES: &[&str] = &[
+    "alignment",
+    "depthtest",
+    "horizontalalign",
+    "playbackmode",
+    "shape",
+    "verticalalign",
+];
 
 fn main() {
     let mut args = std::env::args_os().skip(1);
@@ -97,32 +111,85 @@ impl Survey {
             self.objects(&opened, scene);
         }
         self.files(folder);
+        if let Some(scene) = &scene_json {
+            self.settings(scene);
+        }
+        let mut reasons = BTreeSet::new();
+        if let Ok(scene) = opened.scene() {
+            for missing in scene.missing() {
+                reasons.insert(match &missing {
+                    apolline_scene::Missing::UnknownKey(path)
+                    | apolline_scene::Missing::Animated(path) => {
+                        format!("{}:{}", missing.code(), unindexed(path))
+                    }
+                    apolline_scene::Missing::Setting(what) => format!("setting:{what}"),
+                    other => other.code().to_owned(),
+                });
+            }
+            // Every layer, whatever else the scene needs, so what layers lack shows too.
+            let (_, skipped) = opened.layers(&scene);
+            let mut seen = BTreeSet::new();
+            for reason in skipped.iter().filter(|reason| !reason.ends_with("omitted")) {
+                let reason = format!("layer:{}", layer_class(reason));
+                let counts = self.layers.entry(reason.clone()).or_default();
+                counts.0 += 1;
+                if seen.insert(reason.clone()) {
+                    counts.1 += 1;
+                }
+                reasons.insert(reason);
+            }
+        }
         match opened.prepare() {
             Ok(_) => self.prepared += 1,
             Err(err) => {
-                *self.errors.entry(class(&err.to_string())).or_default() += 1;
-                let reasons = match opened.scene() {
-                    Ok(scene) => scene
-                        .missing()
-                        .iter()
-                        .map(|missing| match missing {
-                            apolline_scene::Missing::UnknownKey(path)
-                            | apolline_scene::Missing::Animated(path) => {
-                                format!("{}:{}", missing.code(), unindexed(path))
-                            }
-                            other => other.code().to_owned(),
-                        })
-                        .collect(),
-                    Err(_) => BTreeSet::new(),
-                };
-                let reasons = if reasons.is_empty() {
-                    BTreeSet::from([format!("prepare:{}", class(&err.to_string()))])
-                } else {
-                    reasons
-                };
+                let class = class(&err.to_string());
+                *self.errors.entry(class.clone()).or_default() += 1;
+                if !class.starts_with("needs") || reasons.is_empty() {
+                    reasons.insert(format!("prepare:{class}"));
+                }
                 self.blocked.push(reasons);
             }
         }
+    }
+
+    /// Plain values of the scene's general settings and its objects' own keys.
+    fn settings(&mut self, scene: &Value) {
+        let general = scene.get("general").and_then(Value::as_object);
+        for (key, value) in general.into_iter().flatten() {
+            self.value(&format!("general.{key}"), key, value);
+        }
+        let objects = scene.get("objects").and_then(Value::as_array);
+        for object in objects.into_iter().flatten().filter_map(Value::as_object) {
+            for (key, value) in object {
+                if !matches!(key.as_str(), "id" | "parent") {
+                    self.value(&format!("objects[].{key}"), key, value);
+                }
+            }
+        }
+    }
+
+    fn value(&mut self, path: &str, key: &str, value: &Value) {
+        let value = match value {
+            Value::Object(fields) if fields.keys().all(|key| key == "user" || key == "value") => {
+                fields.get("value").unwrap_or(&Value::Null)
+            }
+            other => other,
+        };
+        let shown = match value {
+            Value::Bool(flag) => flag.to_string(),
+            Value::Number(number) => number
+                .as_f64()
+                .map(|number| format!("{}", (number * 1000.0).round() / 1000.0))
+                .unwrap_or_default(),
+            Value::String(text) if CHOICES.contains(&key) && text.len() <= 32 => vocabulary(text),
+            _ => return,
+        };
+        *self
+            .values
+            .entry(path.to_owned())
+            .or_default()
+            .entry(shown)
+            .or_default() += 1;
     }
 
     /// Effects, materials, shaders, models and particle systems the scene's objects use.
@@ -297,6 +364,24 @@ impl Survey {
                 alone.get(reason).copied().unwrap_or(0)
             );
         }
+        out += "\n## Layers left out\n\nWhy single layers can't be drawn, in layers and in scenes.\n\n";
+        out += "| reason | layers | scenes |\n|---|---|---|\n";
+        let mut layers: Vec<(&String, &(usize, usize))> = self.layers.iter().collect();
+        layers.sort_by(|a, b| (b.1).1.cmp(&(a.1).1).then((b.1).0.cmp(&(a.1).0)));
+        for (reason, (count, scenes)) in layers.into_iter().take(80) {
+            out += &format!("| {reason} | {count} | {scenes} |\n");
+        }
+        out += "\n## Setting values\n\nThe most common values of plain settings.\n\n| setting | values |\n|---|---|\n";
+        for (path, values) in &self.values {
+            let mut values: Vec<(&String, &usize)> = values.iter().collect();
+            values.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            let shown: Vec<String> = values
+                .iter()
+                .take(8)
+                .map(|(value, count)| format!("{value} ×{count}"))
+                .collect();
+            out += &format!("| `{path}` | {} |\n", shown.join(", "));
+        }
         out += "\n## Errors by class\n\n";
         out += &table(&self.errors);
         for (kind, words) in &self.words {
@@ -405,6 +490,21 @@ fn unindexed(path: &str) -> String {
         }
     }
     out
+}
+
+/// A left-out layer's reason without the layer's name, which comes first.
+fn layer_class(message: &str) -> String {
+    let reason = message
+        .split_once(": ")
+        .map_or(message, |(_, reason)| reason);
+    let words: Vec<String> = reason
+        .split_whitespace()
+        .filter(|word| !word.contains('/') && !word.contains('.'))
+        .map(|word| word.chars().filter(char::is_ascii_alphanumeric).collect())
+        .filter(|word: &String| !word.is_empty())
+        .take(9)
+        .collect();
+    vocabulary(&words.join("_"))
 }
 
 /// An error's first words, without paths or names. Layer errors come as `name: reason; …`,
