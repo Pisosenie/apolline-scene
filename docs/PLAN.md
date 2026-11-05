@@ -110,6 +110,13 @@ Wallpaper Engine file has been read yet.
   and values; `a_Position` is the layer's corner in its own units, centred, `a_TexCoord` its
   texture coordinate, `g_ModelViewProjectionMatrix` places it; any varyings, matched by name
   and type. Vertex shaders that sample or read other engine uniforms are refused.
+- Effects (B3–B5): each shown instance names an `effect.json` whose passes name one-pass
+  materials; the instance's passes override combos, values and textures. A layer with effects
+  is drawn into a target of its texture's size, each pass over the last back and forth
+  between two targets, and the result placed like a plain layer; a chain without time is
+  drawn once. Named targets (`fbos`, `target`, `bind`), passes that blend and animated values
+  are refused by name, so the survey can count them. `--effect-demo` draws exactly what the
+  plain demo draws, through two inversions and a tint.
 - `examples/survey.rs` (A3): the shapes of a real install, for deciding what comes next.
 - apolline-wall draws the scenes this covers with `Project::prepare` and flattens still ones
   once; everything else still goes to linux-wallpaperengine.
@@ -127,6 +134,8 @@ Known gaps in the material path, from review:
   helper — draw the same pixels on Mesa's GLES and on macOS's desktop GL (`tools/gles-check.sh`).
 - `{"user": {"name", "condition"}}` bindings aren't followed; `Scene::missing` names them, so
   such scenes go to linux-wallpaperengine.
+- Every texture is clamped at its edges. Wallpaper Engine's textures carry a flag for that,
+  so noise and other tiling textures read by effects probably want repeating instead.
 - Without a vertex shader of its own, a `vec4 v_TexCoord` gets zeros in `zw`; `g_Color` and `g_Alpha` are always 1 with the tint
   applied after, and `g_TexelSize` follows the framebuffer rather than the layer.
 

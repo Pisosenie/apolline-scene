@@ -128,12 +128,14 @@ impl Frame {
     pub(super) unsafe fn update(
         &self,
         gl: &glow::Context,
+        screen: (u32, u32),
         target: (u32, u32),
         time: f32,
         delta: f32,
     ) {
         let width = target.0.max(1) as f32;
         let height = target.1.max(1) as f32;
+        let screen = (screen.0.max(1) as f32, screen.1.max(1) as f32);
         let finite = |value: f32| {
             if value.is_finite() {
                 value.max(0.0)
@@ -144,7 +146,12 @@ impl Frame {
         unsafe {
             gl.uniform_1_f32(self.time.as_ref(), finite(time));
             gl.uniform_1_f32(self.delta.as_ref(), finite(delta));
-            gl.uniform_3_f32(self.screen.as_ref(), width, height, width / height);
+            gl.uniform_3_f32(
+                self.screen.as_ref(),
+                screen.0,
+                screen.1,
+                screen.0 / screen.1,
+            );
             gl.uniform_2_f32(self.texel.as_ref(), 1.0 / width, 1.0 / height);
             gl.uniform_2_f32(self.half_texel.as_ref(), 0.5 / width, 0.5 / height);
         }

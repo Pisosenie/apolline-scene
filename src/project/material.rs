@@ -166,9 +166,28 @@ impl Project {
                 blending,
             });
         }
-        if resources.custom_materials >= 64 {
+        let fragment = self.custom(shader, &combos, &constants, &mut names, false, resources)?;
+        Ok(Material {
+            names,
+            fragment: Some(fragment),
+            blending,
+        })
+    }
+
+    /// A custom shader's program for one pass. A `chained` pass is an effect's, whose slot 0
+    /// is the layer's picture so far rather than a texture.
+    pub(super) fn custom(
+        &self,
+        shader: &str,
+        combos: &serde_json::Map<String, Value>,
+        constants: &serde_json::Map<String, Value>,
+        names: &mut Vec<Option<String>>,
+        chained: bool,
+        resources: &mut Resources,
+    ) -> Result<Arc<Fragment>, Error> {
+        if resources.custom_materials >= 256 {
             return Err(Error::Format(
-                "scene exceeds 64 custom fragment materials".into(),
+                "scene exceeds 256 custom shader passes".into(),
             ));
         }
         resources.custom_materials += 1;
@@ -200,24 +219,35 @@ impl Project {
             None => None,
         };
         let template = Template::load(&entry, load)?;
-        template.fill_defaults(&mut names, &combos)?;
-        let mask = bindings(&names)?;
-        let fragment = template.prepare(&combos, &constants, Some(mask), vertex)?;
+        if chained && names.is_empty() {
+            names.push(None);
+        }
+        template.fill_defaults(names, combos)?;
+        let mask = if chained {
+            names[0] = None;
+            let mut mask = 1;
+            for (slot, name) in names.iter().enumerate().skip(1) {
+                if let Some(name) = name {
+                    texture_file(name)?;
+                    mask |= 1 << slot;
+                }
+            }
+            mask
+        } else {
+            bindings(names)?
+        };
+        let fragment = template.prepare(combos, constants, Some(mask), vertex)?;
         fragment.validate_inputs(mask)?;
         let bytes = fragment.source.len() + fragment.vertex.as_ref().map_or(0, String::len);
         if bytes > (16 * 1024 * 1024usize).saturating_sub(resources.source_bytes) {
             return Err(Error::Format("scene shader sources exceed 16 MiB".into()));
         }
         resources.source_bytes += bytes;
-        Ok(Material {
-            names,
-            fragment: Some(Arc::new(fragment)),
-            blending,
-        })
+        Ok(Arc::new(fragment))
     }
 }
 
-fn object(
+pub(super) fn object(
     value: Option<&Value>,
     count: usize,
     key_bytes: usize,
@@ -238,7 +268,7 @@ fn object(
     }
 }
 
-fn names(value: Option<&Value>) -> Result<Vec<Option<String>>, Error> {
+pub(super) fn names(value: Option<&Value>) -> Result<Vec<Option<String>>, Error> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };

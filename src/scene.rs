@@ -55,8 +55,8 @@ pub struct Image {
     pub visible: bool,
     /// How far it moves with the pointer, relative to the scene's parallax amount.
     pub depth: [f32; 2],
-    /// Effects on it, drawn from stage 3 on.
-    pub effects: usize,
+    /// The effects on it that are shown, as the scene gives them, in drawing order.
+    pub effects: Vec<Value>,
 }
 
 const DEFAULT_SIZE: (f32, f32) = (1920.0, 1080.0);
@@ -121,7 +121,6 @@ impl Scene {
         }
         for object in &self.objects {
             match object {
-                Object::Image(image) if image.effects > 0 => note(Missing::Effects),
                 Object::Image(image) if image.angles[0] != 0.0 || image.angles[1] != 0.0 => {
                     note(Missing::Rotation3d)
                 }
@@ -155,12 +154,12 @@ fn object(value: &Value) -> Object {
             depth: vector(field("parallaxDepth"), [1.0; 2]),
             effects: field("effects")
                 .and_then(Value::as_array)
-                .map_or(0, |effects| {
-                    effects
-                        .iter()
-                        .filter(|effect| flag(effect.get("visible")).unwrap_or(true))
-                        .count()
-                }),
+                .into_iter()
+                .flatten()
+                .filter(|effect| flag(effect.get("visible")).unwrap_or(true))
+                .take(64)
+                .cloned()
+                .collect(),
         });
     }
     if let Some(particles) = text(field("particle")) {
@@ -213,8 +212,8 @@ mod tests {
         assert_eq!(images[1].size, None);
         assert_eq!(images[1].scale, [1.5, 1.5, 1.0]);
         assert_eq!((images[1].alpha, images[1].visible), (0.6, false));
-        assert_eq!(images[1].effects, 1);
-        assert_eq!(scene.missing(), [Missing::Effects, Missing::Particles]);
+        assert_eq!(images[1].effects.len(), 1);
+        assert_eq!(scene.missing(), [Missing::Particles]);
     }
 
     #[test]

@@ -2,18 +2,18 @@
 //! the host has bound. The scene covers the target the way a wallpaper does: scaled to fill,
 //! centred and cropped.
 
+mod build;
+mod chain;
 mod compile;
 mod geometry;
 mod material;
 mod state;
+mod target;
 mod upload;
 
 use geometry::toward;
 pub use geometry::{Affine, Fit, place, place_fitted};
 use upload::{reserve, upload};
-
-use std::collections::HashMap;
-use std::sync::Arc;
 
 use glow::HasContext;
 
@@ -61,18 +61,28 @@ struct Input {
     resolution: [f32; 4],
 }
 
-struct Drawn {
+/// Material values with where they go in their program.
+type Values = Vec<(Option<glow::UniformLocation>, Constant)>;
+
+/// One draw of a quad: which program, what it reads and the values it's given.
+struct Step {
     program: usize,
     inputs: Vec<Input>,
     channels: i32,
     uv_max: [f32; 2],
+    constants: Values,
+}
+
+struct Drawn {
+    step: Step,
+    /// The layer's effects, drawn first; `step` then places their result.
+    chain: Option<chain::Chain>,
     origin: [f32; 2],
     size: (f32, f32),
     angle: f32,
     tint: [f32; 4],
     blending: Blending,
     depth: [f32; 2],
-    constants: Vec<(Option<glow::UniformLocation>, Constant)>,
 }
 
 struct Program {
@@ -118,140 +128,14 @@ impl Renderer {
             parallax: scene.parallax,
             eye: [0.0; 2],
         };
-        let mut textures = HashMap::new();
-        let mut variants = HashMap::new();
-        let mut source_bytes = 0usize;
-        let mut allocated = 0;
+        let mut builder = build::Builder::new(gl);
         let prepared = (|| {
             if layers.len() > 4096 {
                 return Err(Error::Format("renderer exceeds 4096 layers".into()));
             }
             for layer in layers.iter().filter(|layer| layer.image.visible) {
-                let count = 1 + layer.secondary.len();
-                if count > 8 || (layer.fragment.is_none() && count != 1) {
-                    return Err(Error::Format("unsupported number of layer textures".into()));
-                }
-                let mut bindings = 1u8;
-                for input in &layer.secondary {
-                    if input.slot == 0 || input.slot >= 8 || bindings & (1 << input.slot) != 0 {
-                        return Err(Error::Format(
-                            "duplicate or invalid secondary sampler slot".into(),
-                        ));
-                    }
-                    bindings |= 1 << input.slot;
-                }
-                if let Some(fragment) = &layer.fragment {
-                    fragment.validate_inputs(bindings)?;
-                }
-                let mut inputs = Vec::with_capacity(count);
-                let mut uv_max = [1.0; 2];
-                let mut channels = 4;
-                for (slot, input) in std::iter::once((0, &layer.texture)).chain(
-                    layer
-                        .secondary
-                        .iter()
-                        .map(|input| (input.slot, &input.texture)),
-                ) {
-                    let key = Arc::as_ptr(input);
-                    let (texture, uv) = match textures.get(&key) {
-                        Some(uploaded) => *uploaded,
-                        None => {
-                            let bytes = input
-                                .images
-                                .first()
-                                .into_iter()
-                                .flatten()
-                                .try_fold(0usize, |total, mip| total.checked_add(mip.pixels.len()))
-                                .ok_or_else(|| {
-                                    Error::Format("texture byte count overflow".into())
-                                })?;
-                            reserve(&mut allocated, bytes)?;
-                            let uploaded = unsafe { upload(gl, input)? };
-                            renderer.textures.push(uploaded.0);
-                            textures.insert(key, uploaded);
-                            uploaded
-                        }
-                    };
-                    let first = input
-                        .images
-                        .first()
-                        .and_then(|image| image.first())
-                        .ok_or_else(|| Error::Format("layer has no texture image".into()))?;
-                    if slot == 0 {
-                        uv_max = uv;
-                        channels = first.channels.count() as i32;
-                    }
-                    inputs.push(Input {
-                        slot,
-                        texture,
-                        resolution: [
-                            first.width as f32,
-                            first.height as f32,
-                            input.image_width.min(first.width) as f32,
-                            input.image_height.min(first.height) as f32,
-                        ],
-                    });
-                }
-                let mut program = 0;
-                let mut constants = Vec::new();
-                if let Some(fragment) = &layer.fragment {
-                    let key = (fragment.vertex.as_deref(), fragment.source.as_str());
-                    program = match variants.get(&key) {
-                        Some(index) => *index,
-                        None => {
-                            let bytes = fragment.source.len()
-                                + fragment.vertex.as_ref().map_or(0, String::len);
-                            if variants.len() >= 64
-                                || bytes > (16 * 1024 * 1024usize).saturating_sub(source_bytes)
-                            {
-                                return Err(Error::Format(
-                                    "renderer exceeds fragment program budget".into(),
-                                ));
-                            }
-                            let custom = unsafe { material::program(gl, fragment)? };
-                            source_bytes += bytes;
-                            let index = renderer.programs.len();
-                            renderer.programs.push(custom);
-                            variants.insert(key, index);
-                            index
-                        }
-                    };
-                    let id = renderer.programs[program].id;
-                    constants = fragment
-                        .constants
-                        .iter()
-                        .map(|(name, value)| unsafe {
-                            (gl.get_uniform_location(id, name), value.clone())
-                        })
-                        .collect();
-                }
-                let image = &layer.image;
-                let (origin, size) = if layer.fullscreen {
-                    ([scene.size.0 / 2.0, scene.size.1 / 2.0], scene.size)
-                } else {
-                    let natural = (
-                        layer.texture.image_width as f32,
-                        layer.texture.image_height as f32,
-                    );
-                    let (w, h) = image.size.unwrap_or(natural);
-                    (
-                        [image.origin[0], image.origin[1]],
-                        (w * image.scale[0], h * image.scale[1]),
-                    )
-                };
-                renderer.layers.push(Drawn {
-                    program,
-                    channels,
-                    inputs,
-                    uv_max,
-                    origin,
-                    size,
-                    angle: image.angles[2],
-                    tint: [image.color[0], image.color[1], image.color[2], image.alpha],
-                    blending: layer.blending,
-                    depth: image.depth,
-                    constants,
-                });
+                let drawn = unsafe { builder.layer(&mut renderer, scene, layer)? };
+                renderer.layers.push(drawn);
             }
             Ok(())
         })();
@@ -259,11 +143,11 @@ impl Renderer {
             unsafe { renderer.delete(gl) };
             return Err(error);
         }
-        renderer.texture_bytes = allocated;
+        renderer.texture_bytes = builder.allocated;
         Ok(renderer)
     }
 
-    /// Logical bytes in unique uploaded mipmaps, excluding driver overhead.
+    /// Logical bytes in unique uploaded mipmaps and effect targets, excluding driver overhead.
     pub fn texture_bytes(&self) -> usize {
         self.texture_bytes
     }
@@ -334,15 +218,17 @@ impl Renderer {
         });
         unsafe {
             let host = state::Host::save(gl);
-            host.bind(gl);
-            gl.viewport(0, 0, target.0 as i32, target.1 as i32);
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::CULL_FACE);
             gl.disable(glow::STENCIL_TEST);
             gl.color_mask(true, true, true, true);
             gl.blend_equation(glow::FUNC_ADD);
-            gl.bind_sampler(0, None);
+            for chain in self.layers.iter().filter_map(|layer| layer.chain.as_ref()) {
+                chain.run(gl, &self.programs, target, time, delta);
+            }
+            host.bind(gl);
+            gl.viewport(0, 0, target.0 as i32, target.1 as i32);
             if fit == Fit::Contain {
                 gl.clear_color(0.0, 0.0, 0.0, 1.0);
                 gl.clear(glow::COLOR_BUFFER_BIT);
@@ -356,17 +242,16 @@ impl Renderer {
             gl.clear(glow::COLOR_BUFFER_BIT);
             // Layer alpha blends RGB over the scene background; the final scene is opaque.
             gl.color_mask(true, true, true, false);
-            gl.active_texture(glow::TEXTURE0);
             let mut current_program = None;
             for layer in &self.layers {
-                let program = &self.programs[layer.program];
-                if current_program != Some(layer.program) {
+                let program = &self.programs[layer.step.program];
+                if current_program != Some(layer.step.program) {
                     gl.use_program(Some(program.id));
                     gl.bind_vertex_array(Some(program.vao));
                     if let Some(frame) = &program.frame {
-                        frame.update(gl, target, time, delta);
+                        frame.update(gl, target, target, time, delta);
                     }
-                    current_program = Some(layer.program);
+                    current_program = Some(layer.step.program);
                 }
                 let origin = [
                     layer.origin[0] + shift[0] * layer.depth[0],
@@ -384,32 +269,15 @@ impl Renderer {
                         gl.blend_func(glow::SRC_ALPHA, glow::ONE);
                     }
                 }
-                gl.uniform_3_f32_slice(program.row0.as_ref(), &affine[0]);
-                gl.uniform_3_f32_slice(program.row1.as_ref(), &affine[1]);
-                gl.uniform_2_f32_slice(program.uv_max.as_ref(), &layer.uv_max);
-                if program.mvp.is_some() {
-                    gl.uniform_matrix_4_f32_slice(
-                        program.mvp.as_ref(),
-                        false,
-                        &material::model_view_projection(&affine, layer.size),
-                    );
-                    gl.uniform_2_f32(program.layer_size.as_ref(), layer.size.0, layer.size.1);
-                }
-                gl.uniform_4_f32_slice(program.tint.as_ref(), &layer.tint);
-                gl.uniform_1_i32(program.channels.as_ref(), layer.channels);
-                for (location, value) in &layer.constants {
-                    material::set(gl, location.as_ref(), value);
-                }
-                for input in &layer.inputs {
-                    gl.active_texture(glow::TEXTURE0 + u32::from(input.slot));
-                    gl.bind_sampler(u32::from(input.slot), None);
-                    gl.bind_texture(glow::TEXTURE_2D, Some(input.texture));
-                    gl.uniform_4_f32_slice(
-                        program.resolution[input.slot as usize].as_ref(),
-                        &input.resolution,
-                    );
-                }
-                gl.active_texture(glow::TEXTURE0);
+                bind(
+                    gl,
+                    program,
+                    &layer.step,
+                    &affine,
+                    layer.size,
+                    layer.tint,
+                    None,
+                );
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
             gl.disable(glow::BLEND);
@@ -427,11 +295,58 @@ impl Renderer {
             for texture in self.textures {
                 gl.delete_texture(texture);
             }
+            for chain in self.layers.iter().filter_map(|layer| layer.chain.as_ref()) {
+                chain.delete(gl);
+            }
             for program in self.programs {
                 gl.delete_vertex_array(program.vao);
                 gl.delete_program(program.id);
             }
         }
+    }
+}
+
+/// Sets what a step reads for one quad placed by `affine`, `size` in the units its vertex
+/// shader's positions are in. `before` is the picture an effect pass draws over.
+///
+/// # Safety
+/// The GL context and the step's program must be current on this thread.
+unsafe fn bind(
+    gl: &glow::Context,
+    program: &Program,
+    step: &Step,
+    affine: &Affine,
+    size: (f32, f32),
+    tint: [f32; 4],
+    before: Option<&Input>,
+) {
+    unsafe {
+        gl.uniform_3_f32_slice(program.row0.as_ref(), &affine[0]);
+        gl.uniform_3_f32_slice(program.row1.as_ref(), &affine[1]);
+        gl.uniform_2_f32_slice(program.uv_max.as_ref(), &step.uv_max);
+        if program.mvp.is_some() {
+            gl.uniform_matrix_4_f32_slice(
+                program.mvp.as_ref(),
+                false,
+                &material::model_view_projection(affine, size),
+            );
+            gl.uniform_2_f32(program.layer_size.as_ref(), size.0, size.1);
+        }
+        gl.uniform_4_f32_slice(program.tint.as_ref(), &tint);
+        gl.uniform_1_i32(program.channels.as_ref(), step.channels);
+        for (location, value) in &step.constants {
+            material::set(gl, location.as_ref(), value);
+        }
+        for input in before.into_iter().chain(&step.inputs) {
+            gl.active_texture(glow::TEXTURE0 + u32::from(input.slot));
+            gl.bind_sampler(u32::from(input.slot), None);
+            gl.bind_texture(glow::TEXTURE_2D, Some(input.texture));
+            gl.uniform_4_f32_slice(
+                program.resolution[input.slot as usize].as_ref(),
+                &input.resolution,
+            );
+        }
+        gl.active_texture(glow::TEXTURE0);
     }
 }
 

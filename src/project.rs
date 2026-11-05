@@ -2,7 +2,10 @@
 //! `scene.pkg` or loose in the folder, and what neither has comes from Wallpaper Engine's own
 //! `assets` folder, which holds the materials and shaders scenes share.
 
+mod effect;
 mod material;
+
+pub use effect::EffectPass;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -47,6 +50,8 @@ pub struct Layer {
     pub blending: Blending,
     /// It covers the whole scene, whatever its own origin and size say.
     pub fullscreen: bool,
+    /// Its effects' passes, drawn in order over its picture before it's placed in the scene.
+    pub effects: Vec<EffectPass>,
 }
 
 /// A texture bound to an explicit secondary sampler slot.
@@ -176,8 +181,9 @@ impl Project {
         if prepared.layers.iter().any(|layer| {
             layer
                 .fragment
-                .as_ref()
-                .is_some_and(|fragment| fragment.animated)
+                .iter()
+                .chain(layer.effects.iter().map(|pass| &pass.fragment))
+                .any(|fragment| fragment.animated)
         }) {
             return Err(Error::Format(
                 "time-dependent materials need animated scene playback".into(),
@@ -276,7 +282,9 @@ impl Project {
                     .map_err(diagnostic)
             })
             .as_ref()
-            .map_err(|reason| Error::Format(reason.clone()))?;
+            .map_err(|reason| Error::Format(reason.clone()))?
+            .clone();
+        let effects = self.effects(image, textures, remaining, still)?;
         Ok(Layer {
             image: image.clone(),
             texture: Arc::clone(&resolved.texture),
@@ -284,6 +292,7 @@ impl Project {
             fragment: resolved.fragment.clone(),
             blending: resolved.blending,
             fullscreen: resolved.fullscreen,
+            effects,
         })
     }
 

@@ -13,6 +13,7 @@ demos.add_argument("--mask-demo", action="store_true", help="apply a synthetic t
 parser.add_argument("--mask-format", choices=("r", "rg", "rgba"), default="r", help="opacity-mask storage (default: R8)")
 demos.add_argument("--wave-demo", action="store_true", help="apply a synthetic native animated wave material")
 demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and sun through pass-through materials with their own vertex shaders")
+demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
 if args.without_mask and not args.mask_demo:
@@ -130,6 +131,47 @@ varying float v_Keep;
 uniform sampler2D g_Texture0;
 void main() {
     gl_FragColor = texSample2D(g_Texture0, v_TexCoord.zw) * v_Keep;
+}
+'''
+if args.effect_demo:
+    # Two inversions on the sun, the second through its own vertex shader, and a tint on the
+    # sky that only the instance's own value and a white second texture leave as it was.
+    scene = json.loads(files["scene.json"])
+    scene["objects"][0]["effects"] = [{"file": "effects/tint/effect.json", "passes": [{"constantshadervalues": {"color": "1 1 1"}}]}]
+    scene["objects"][1]["effects"] = [{"file": "effects/invert/effect.json"}, {"file": "effects/invert/effect.json", "passes": [{"combos": {"STAGED": 1}}]}]
+    files["scene.json"] = json.dumps(scene).encode()
+    files["effects/invert/effect.json"] = b'{"name": "invert", "passes": [{"material": "materials/effects/invert.json"}]}'
+    files["materials/effects/invert.json"] = b'{"passes": [{"shader": "effects/invert", "blending": "normal", "textures": [null]}]}'
+    files["shaders/effects/invert.vert"] = b'''// [COMBO] {"combo":"STAGED","default":0}
+attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+uniform mat4 g_ModelViewProjectionMatrix;
+varying vec2 v_TexCoord;
+void main() {
+    gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+#if STAGED
+    v_TexCoord = a_TexCoord;
+#else
+    v_TexCoord = a_TexCoord;
+#endif
+}
+'''
+    files["shaders/effects/invert.frag"] = b'''varying vec2 v_TexCoord;
+uniform sampler2D g_Texture0;
+void main() {
+    vec4 pixel = texSample2D(g_Texture0, v_TexCoord);
+    gl_FragColor = vec4(1.0 - pixel.rgb, pixel.a);
+}
+'''
+    files["effects/tint/effect.json"] = b'{"name": "tint", "passes": [{"material": "materials/effects/tint.json"}]}'
+    files["materials/effects/tint.json"] = b'{"passes": [{"shader": "effects/tint", "textures": [null, "util/white"], "constantshadervalues": {"color": "0 0 0"}}]}'
+    files["materials/util/white.tex"] = tex(0, 1, 1, bytes([255, 255, 255, 255]))
+    files["shaders/effects/tint.frag"] = b'''varying vec2 v_TexCoord;
+uniform sampler2D g_Texture0;
+uniform sampler2D g_Texture1;
+uniform vec3 u_Color; // {"material":"color","default":"1 1 1"}
+void main() {
+    gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(u_Color, 1.0) * texSample2D(g_Texture1, v_TexCoord);
 }
 '''
 def string(t): t = t.encode(); return struct.pack("<I", len(t)) + t

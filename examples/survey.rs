@@ -399,9 +399,12 @@ fn unindexed(path: &str) -> String {
     out
 }
 
-/// An error's first words, without paths or names.
+/// An error's first words, without paths or names. Layer errors come as `name: reason; …`,
+/// so only the first reason after its last colon is kept.
 fn class(message: &str) -> String {
-    let words: Vec<String> = message
+    let first = message.split("; ").next().unwrap_or(message);
+    let reason = first.rsplit(": ").next().unwrap_or(first);
+    let words: Vec<String> = reason
         .split_whitespace()
         .filter(|word| !word.contains('/') && !word.contains('.'))
         .map(|word| word.chars().filter(char::is_ascii_alphanumeric).collect())
@@ -486,7 +489,11 @@ mod tests {
         );
         assert_eq!(effect_name("my effect.json"), "<custom>");
         assert_eq!(vocabulary("Лето у моря"), "<other>");
-        assert_eq!(class("can't read /home/me/x.tex: gone"), "cant_read_gone");
+        assert_eq!(class("can't read /home/me/x.tex"), "cant_read");
+        assert_eq!(
+            class("My Secret Layer: effect x: unsupported field fbos; b: c"),
+            "unsupported_field_fbos"
+        );
         assert_eq!(texture_header(b"junk"), "unreadable");
         let mut shapes = Shapes::new();
         shape(
