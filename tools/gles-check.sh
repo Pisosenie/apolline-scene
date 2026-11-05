@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Draws the demo scenes and a dialect material through the viewer and prints each frame's first
-# pixel. On Linux that's GLES under a throwaway headless sway (Mesa's software GLES does); on
+# pixel and a hash of all of them. Hashes only compare within one driver. On Linux that's GLES under a throwaway headless sway (Mesa's software GLES does); on
 # macOS it's desktop OpenGL, so the two can be compared.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,7 +44,15 @@ def tex(w, h, pixels):
 (out / "model.json").write_text(json.dumps({"material": "material.json", "fullscreen": True}))
 (out / "material.json").write_text(json.dumps({"passes": [{"shader": "demo", "textures": ["white"], "blending": "normal", "cullmode": "nocull", "depthtest": "disabled", "depthwrite": "disabled"}]}))
 (out / "materials/white.tex").write_bytes(tex(1, 1, bytes([255, 255, 255, 255])))
-(out / "shaders/demo.vert").write_text("void main() {}")
+(out / "shaders/demo.vert").write_text("""attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+uniform mat4 g_ModelViewProjectionMatrix;
+varying vec2 v_TexCoord;
+void main() {
+    gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+    v_TexCoord = a_TexCoord;
+}
+""")
 (out / "shaders/demo.frag").write_text("""varying vec2 v_TexCoord;
 uniform sampler2D g_Texture0;
 void split(vec4 c, out vec3 rgb, out float a) { rgb = c.rgb; a = c.a; }
@@ -69,11 +77,18 @@ while at < len(data):
         color = body[9]
     if kind == b"IDAT":
         packed += body
+import hashlib
 raw = zlib.decompress(packed)
-print(list(raw[1:1 + (4 if color == 6 else 3)]))
+print(list(raw[1:1 + (4 if color == 6 else 3)]), "all", hashlib.sha1(raw).hexdigest()[:12])
 PY
 }
 for project in "${projects[@]}"; do
     "$view" --shot "$work/$project.png" "$work/$project" 2>&1 | sed "s/^/$project: /"
-    echo "$project: first pixel $(first_pixel "$work/$project.png")"
+    pixel=$(first_pixel "$work/$project.png")
+    echo "${pixel##* }" > "$work/$project.hash"
+    echo "$project: first pixel $pixel"
+done
+# Hashes differ between drivers, but these demos have to draw what the plain one does on each.
+for project in vertex effect inputs; do
+    cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done
