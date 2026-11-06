@@ -7,13 +7,13 @@ use std::sync::Arc;
 use glow::HasContext;
 
 use crate::Error;
-use crate::particles::{Sheet, Simulation, System};
+use crate::particles::{Renderer, Sheet, Simulation, System};
 use crate::tex::Frame;
 
 /// Floats per particle: centre x and y, size and turn; colour and alpha; the corners of its
-/// frame and the next in the texture; their top and left sides; and how far it is on to the
-/// next.
-const FLOATS: usize = 17;
+/// frame and the next in the texture; their top and left sides; how far it is on to the next;
+/// and how many times its width it is tall.
+const FLOATS: usize = 18;
 
 pub(super) const VERTEX: &str = "
 uniform vec3 row0;
@@ -23,14 +23,14 @@ layout(location = 0) in vec4 particle;
 layout(location = 1) in vec4 particle_color;
 layout(location = 2) in vec4 frames;
 layout(location = 3) in vec4 sides;
-layout(location = 4) in float onward;
+layout(location = 4) in vec2 onward;
 out vec2 uv;
 out vec2 next_uv;
 out float blend;
 out vec4 shade;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
-    vec2 offset = (corner - 0.5) * particle.z;
+    vec2 offset = (corner - 0.5) * particle.z * vec2(1.0, onward.y);
     float c = cos(particle.w);
     float s = sin(particle.w);
     vec2 at = particle.xy + vec2(c * offset.x - s * offset.y, s * offset.x + c * offset.y);
@@ -40,7 +40,7 @@ void main() {
     vec2 inside = across.x * sides.xy + across.y * sides.zw;
     uv = frames.xy + inside;
     next_uv = frames.zw + inside;
-    blend = onward;
+    blend = onward.x;
     shade = particle_color;
 }";
 
@@ -73,6 +73,8 @@ pub(super) struct Swarm {
     /// A sprite sheet's frames' corners, and all their sides; without one, the whole picture.
     corners: Vec<[f32; 2]>,
     sides: [f32; 4],
+    /// How many times as tall as wide its picture is.
+    ratio: f32,
 }
 
 impl Swarm {
@@ -85,6 +87,7 @@ impl Swarm {
         system: &Arc<System>,
         frames: &[Frame],
         uv_max: [f32; 2],
+        ratio: f32,
         seed: u64,
     ) -> Result<Self, Error> {
         let fail = |what: String| Error::Format(format!("a particle buffer: {what}"));
@@ -106,7 +109,7 @@ impl Swarm {
             );
             let stride = (FLOATS * 4) as i32;
             for (location, size, offset) in
-                [(0, 4, 0), (1, 4, 16), (2, 4, 32), (3, 4, 48), (4, 1, 64)]
+                [(0, 4, 0), (1, 4, 16), (2, 4, 32), (3, 4, 48), (4, 2, 64)]
             {
                 gl.enable_vertex_attrib_array(location);
                 gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, offset);
@@ -132,6 +135,11 @@ impl Swarm {
                 buffer,
                 corners,
                 sides,
+                ratio: if ratio.is_finite() && ratio > 0.0 {
+                    ratio
+                } else {
+                    1.0
+                },
             })
         }
     }
@@ -162,6 +170,7 @@ impl Swarm {
         simulation.seek(time);
         let perspective = simulation.perspective();
         let sheet = simulation.sheet();
+        let renderer = simulation.renderer();
         let particles = simulation.particles();
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
         let (sin, cos) = angle.sin_cos();
@@ -177,12 +186,21 @@ impl Swarm {
             };
             let (at, near) = seen(at, depth, middle, distance);
             let ([now, next], onward) = frames(self.corners.len(), particle.sheet(sheet), sheet);
+            let (turn, stretch) = match renderer {
+                Renderer::Sprite => (particle.rotation + angle, self.ratio),
+                Renderer::Trail { length, min, max } => {
+                    let [vx, vy, _] = particle.velocity();
+                    let (heading, long) =
+                        trail([vx * scale[0], vy * scale[1]], angle, [length, min, max]);
+                    (heading, long * self.ratio)
+                }
+            };
             let (now, next) = (self.corners[now], self.corners[next]);
             for value in [
                 at[0],
                 at[1],
                 particle.size * scale[0].abs() * near,
-                particle.rotation + angle,
+                turn,
                 particle.color[0],
                 particle.color[1],
                 particle.color[2],
@@ -196,6 +214,7 @@ impl Swarm {
                 self.sides[2],
                 self.sides[3],
                 onward,
+                stretch,
             ] {
                 bytes.extend_from_slice(&value.to_ne_bytes());
             }
@@ -216,6 +235,17 @@ impl Swarm {
             gl.delete_buffer(self.buffer);
         }
     }
+}
+
+/// Which way a trail lies and how many times its width it is long, for a particle moving at
+/// `velocity` in a system turned by `angle`: along the way it goes, `length` times its speed
+/// between `min` and `max`.
+fn trail(velocity: [f32; 2], angle: f32, [length, min, max]: [f32; 3]) -> (f32, f32) {
+    let (sin, cos) = angle.sin_cos();
+    let [vx, vy] = velocity;
+    let (vx, vy) = (cos * vx - sin * vy, sin * vx + cos * vy);
+    let heading = vy.atan2(vx) - std::f32::consts::FRAC_PI_2;
+    (heading, (vx.hypot(vy) * length).clamp(min, max))
 }
 
 /// Which of `count` frames a particle `through` its sheet shows and the one after, and how far
@@ -254,7 +284,22 @@ fn seen(at: [f32; 2], depth: f32, middle: [f32; 2], distance: f32) -> ([f32; 2],
 
 #[cfg(test)]
 mod tests {
-    use super::{frames, seen};
+    use super::{frames, seen, trail};
+
+    #[test]
+    fn trails_lie_along_their_way_as_long_as_their_speed_says() {
+        // Rising: the sprite's top already points up.
+        let (heading, long) = trail([0.0, 100.0], 0.0, [0.05, 1.0, 3.0]);
+        assert!(heading.abs() < 1e-6);
+        assert!((long - 5.0f32.min(3.0)).abs() < 1e-6);
+        // Going right turns it a quarter clockwise; slow ones keep their least length.
+        let (heading, long) = trail([10.0, 0.0], 0.0, [0.05, 1.0, 3.0]);
+        assert!((heading + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert_eq!(long, 1.0);
+        // The system's turn turns the way it goes.
+        let (heading, _) = trail([10.0, 0.0], std::f32::consts::FRAC_PI_2, [0.05, 1.0, 3.0]);
+        assert!(heading.abs() < 1e-5);
+    }
     use crate::particles::Sheet;
 
     #[test]

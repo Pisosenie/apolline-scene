@@ -28,6 +28,11 @@ pub struct Particle {
 }
 
 impl Particle {
+    /// Where it's heading and how fast, in the system's units a second.
+    pub fn velocity(&self) -> [f32; 3] {
+        self.velocity
+    }
+
     /// How far through a sprite sheet it is, 0 to 1: its frame's place among the frames, and
     /// how far on to the next.
     pub fn sheet(&self, sheet: Sheet) -> f32 {
@@ -130,6 +135,11 @@ impl Simulation {
         if ahead > 0.0 {
             self.advance(ahead as f32);
         }
+    }
+
+    /// How its particles are drawn.
+    pub fn renderer(&self) -> crate::particles::Renderer {
+        self.system.renderer
     }
 
     /// How its particles show a sprite sheet.

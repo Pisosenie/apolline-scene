@@ -22,6 +22,15 @@ pub struct System {
     pub perspective: bool,
     /// How its sprite sheet's frames are shown, when its texture is one.
     pub sheet: Sheet,
+    pub renderer: Renderer,
+}
+
+/// How each particle is drawn: a sprite facing the screen, or one stretched along the way it
+/// goes, `length` times its speed long between `min` and `max` times its size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Renderer {
+    Sprite,
+    Trail { length: f32, min: f32, max: f32 },
 }
 
 /// How a particle shows a sprite sheet: a frame picked at random when it's let out, or the
@@ -222,12 +231,31 @@ impl System {
             .ok_or_else(|| refuse("a particle system without a material"))?
             .to_owned();
         let renderers = list(root, "renderer")?;
-        match renderers {
+        let renderer = match renderers {
             [renderer] if text(renderer.get("name")) == Some("sprite") => {
-                known(renderer, &[], "sprite renderer")?
+                known(renderer, &[], "sprite renderer")?;
+                Renderer::Sprite
             }
-            _ => return Err(refuse("particle renderers other than one sprite")),
-        }
+            [renderer] if text(renderer.get("name")) == Some("spritetrail") => {
+                known(
+                    renderer,
+                    &["length", "maxlength", "minlength"],
+                    "trail renderer",
+                )?;
+                let field = |key: &str, fill: f32| {
+                    number(renderer.get(key))
+                        .filter(|value| (0.0..=10000.0).contains(value))
+                        .unwrap_or(fill)
+                };
+                let min = field("minlength", 0.0);
+                Renderer::Trail {
+                    length: field("length", 0.05),
+                    min,
+                    max: field("maxlength", 10.0).max(min),
+                }
+            }
+            _ => return Err(refuse("particle renderers other than one sprite or trail")),
+        };
         let emitters = list(root, "emitter")?
             .iter()
             .map(emitter)
@@ -257,6 +285,7 @@ impl System {
             world: flags & WORLD != 0,
             perspective: flags & PERSPECTIVE != 0,
             sheet,
+            renderer,
         })
     }
 }

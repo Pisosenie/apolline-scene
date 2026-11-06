@@ -227,8 +227,13 @@ impl<'a> Builder<'a> {
         reserve(&mut self.allocated, super::swarm::Swarm::bytes(system))?;
         let seed = renderer.layers.len() as u64;
         let frames = &layer.texture.frames;
+        let (width, height) = layer
+            .texture
+            .frame_size()
+            .unwrap_or((layer.texture.image_width, layer.texture.image_height));
+        let ratio = height as f32 / width.max(1) as f32;
         let swarm =
-            unsafe { super::swarm::Swarm::new(self.gl, system, frames, step.uv_max, seed)? };
+            unsafe { super::swarm::Swarm::new(self.gl, system, frames, step.uv_max, ratio, seed)? };
         Ok(placed(
             step,
             None,
