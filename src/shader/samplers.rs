@@ -106,9 +106,13 @@ pub(super) fn resolve(
         }
         let bound = bindings & (1 << slot) != 0;
         if !bound {
-            if annotation
-                .get("default")
-                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+            // An opacity mask white by default masks nothing, as no mask doesn't.
+            let neutral = annotation.get("mode").and_then(Value::as_str) == Some("opacitymask")
+                && annotation.get("default").and_then(Value::as_str) == Some("util/white");
+            if !neutral
+                && annotation
+                    .get("default")
+                    .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
             {
                 return Err(fail(
                     "unbound optional texture has a default resource; bind it explicitly",
