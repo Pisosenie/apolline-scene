@@ -342,6 +342,11 @@ impl Renderer {
         Ok(renderer)
     }
 
+    /// The scene's own size, in its pixels: the aspect it is drawn at best.
+    pub fn size(&self) -> (f32, f32) {
+        self.size
+    }
+
     /// Logical bytes in unique uploaded mipmaps and effect targets, excluding driver overhead.
     pub fn texture_bytes(&self) -> usize {
         self.texture_bytes
