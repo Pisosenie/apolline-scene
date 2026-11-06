@@ -326,7 +326,10 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         }) {
             note(Missing::Setting("layer configuration"));
         }
-        if number(field("colorBlendMode")).is_some_and(|mode| mode != 0.0) {
+        // Pictures mix with what's under them in 32 ways; text doesn't yet.
+        if number(field("colorBlendMode")).is_some_and(|mode| {
+            mode != 0.0 && (lettered || mode.fract() != 0.0 || !(1.0..=32.0).contains(&mode))
+        }) {
             note(Missing::Setting("colour blend modes"));
         }
         if flag(field("perspective")) == Some(true) {
@@ -607,7 +610,7 @@ mod tests {
     fn what_isnt_understood_is_named() {
         let scene = json!({
             "general": {"bloom": true, "mystery": 1, "zoom": 20},
-            "objects": [{"image": "a.json", "wobble": 3, "colorBlendMode": 9,
+            "objects": [{"image": "a.json", "wobble": 3, "colorBlendMode": 33,
                          "origin": {"value": "0 0 0", "animation": {"frames": []}}}]
         });
         let found = refusals(&scene);

@@ -209,6 +209,8 @@ pub struct Image {
     pub effects: Vec<Effect>,
     /// What it changes in its material's pass: combos, values, textures, user textures.
     pub instance: Option<serde_json::Map<String, Value>>,
+    /// How it mixes with what's under it, 0 for laying over it as usual.
+    pub mode: u8,
 }
 
 impl Image {
@@ -477,6 +479,7 @@ fn object(value: &Value) -> Object {
             layer: Image {
                 size: None,
                 anchor: [0.0; 2],
+                mode: 0,
                 ..picture(value, "")
             },
             text: text(field("text")).unwrap_or_default().to_owned(),
@@ -542,6 +545,9 @@ fn picture(value: &Value, model: &str) -> Image {
         depth: vector(field("parallaxDepth"), [1.0; 2]),
         effects: effects::listed(field("effects")),
         instance: field("instance").and_then(Value::as_object).cloned(),
+        mode: number(field("colorBlendMode"))
+            .filter(|mode| mode.fract() == 0.0 && (0.0..=32.0).contains(mode))
+            .map_or(0, |mode| mode as u8),
     }
 }
 

@@ -20,6 +20,7 @@ fn words(text: &str) -> Text {
             depth: [1.0; 2],
             effects: Vec::new(),
             instance: None,
+            mode: 0,
         },
         text: text.into(),
         font: "fonts/Cantarell-Regular.ttf".into(),

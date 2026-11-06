@@ -189,6 +189,7 @@ impl Project {
                 depth: placed.depth,
                 effects: Vec::new(),
                 instance: None,
+                mode: 0,
             },
             texture,
             secondary: Vec::new(),

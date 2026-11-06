@@ -69,6 +69,12 @@ rest, by scenes:
   own shaders do the same sums. HDR bloom (`hdr`) is still refused. A script may drive
   `bloomstrength` (audio-reactive bloom); it starts from the scene's strength and sees no
   layer.
+- Colour blend modes (`colorBlendMode`), 7: a picture layer is drawn into a target of its own
+  and laid on by our program for its mode, which reads a copy of the frame under it where each
+  pixel lands and mixes the two the way image editors do, in Wallpaper Engine's numbering
+  (darken 1 through tint 30, then add-by-opacity 31 and A + AB 32). Most modes mix by the
+  layer's alpha; min 5 and max 10 don't. Tint (30) checked against a preview's brightness to
+  within 0.005. Text layers that blend are still refused.
 - Camera zoom (`general.zoom`), 3: drawn as the whole scene scaled about its middle, nearer
   above 1. One scene's preview matches it unzoomed, so which way it goes is a guess from a
   scene that animates it from 3 down to 1 as an opening; animated zooms aren't

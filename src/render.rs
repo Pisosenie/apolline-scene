@@ -2,6 +2,7 @@
 //! the host has bound. The scene covers the target the way a wallpaper does: scaled to fill,
 //! centred and cropped.
 
+mod blend;
 mod bloom;
 mod build;
 mod chain;
@@ -113,6 +114,8 @@ struct Drawn {
     sprite: Option<sprite::Sprite>,
     /// A composition layer, whose chain reads the scene drawn so far under it.
     compose: bool,
+    /// How it mixes with what's drawn under it, a copy of which it reads; 0 for not at all.
+    mode: u8,
 }
 
 /// How a layer is placed from where its object is.
@@ -218,6 +221,8 @@ struct Program {
     layer_size: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
     channels: Option<glow::UniformLocation>,
+    /// The screen's size, for a blending layer to find what's under each of its pixels.
+    screen: Option<glow::UniformLocation>,
     frame: Option<material::Frame>,
     resolution: [Option<glow::UniformLocation>; 8],
 }
@@ -587,6 +592,16 @@ impl Renderer {
                     gl.color_mask(true, true, true, false);
                     current_program = None;
                 }
+                // A blending layer reads what's drawn under it, which copying unbinds.
+                let under = if layer.mode != 0 {
+                    current_program = None;
+                    match self.frame.copy(gl, target) {
+                        Some(frame) => Some(frame),
+                        None => continue,
+                    }
+                } else {
+                    None
+                };
                 let program = &self.programs[layer.step.program];
                 if current_program != Some(layer.step.program) {
                     gl.use_program(Some(program.id));
@@ -618,6 +633,14 @@ impl Renderer {
                     layer.tint,
                     &[],
                 );
+                if let Some(frame) = under {
+                    // It writes what's under it mixed with itself, so it's laid on as it is.
+                    gl.disable(glow::BLEND);
+                    gl.uniform_2_f32(program.screen.as_ref(), target.0 as f32, target.1 as f32);
+                    gl.active_texture(glow::TEXTURE0 + UNDER);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(frame));
+                    gl.active_texture(glow::TEXTURE0);
+                }
                 match &layer.swarm {
                     Some(swarm) => {
                         let scale = [layer.size.0, layer.size.1, layer.size.0];
@@ -787,7 +810,10 @@ fn header(gl: &glow::Context) -> &'static str {
     }
 }
 
-/// One of our own programs: the plain layer's, or the particle sprites'.
+/// The texture unit a blending layer reads what's under it from.
+const UNDER: u32 = 7;
+
+/// One of our own programs: the plain layer's, a blending layer's, or the particle sprites'.
 unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Program, Error> {
     let fail = |what: String| Error::Format(format!("the layer shader: {what}"));
     unsafe {
@@ -804,6 +830,7 @@ unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Pr
             let vao = gl.create_vertex_array().map_err(fail)?;
             gl.use_program(Some(id));
             gl.uniform_1_i32(sampler.as_ref(), 0);
+            gl.uniform_1_i32(uniform("under").as_ref(), UNDER as i32);
             Ok(Program {
                 id,
                 vao,
@@ -818,6 +845,7 @@ unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Pr
                 layer_size: uniform("apolline_layer_size"),
                 tint,
                 channels: uniform("picture_channels"),
+                screen: uniform("apolline_screen"),
                 frame: None,
                 resolution: std::array::from_fn(|_| None),
             })

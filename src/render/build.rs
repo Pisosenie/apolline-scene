@@ -39,6 +39,7 @@ fn placed(
         words: None,
         sprite: None,
         compose: layer.compose,
+        mode: layer.image.mode,
     };
     drawn.pose(&layer.image.pose());
     drawn
@@ -55,6 +56,8 @@ pub(super) struct Builder<'a> {
     variants: HashMap<(Option<&'a str>, &'a str), usize>,
     /// Our particle program, once a layer needs it.
     particles: Option<usize>,
+    /// Our blending layers' programs, by mode.
+    blends: HashMap<u8, usize>,
     /// The objects whose finished pictures other layers' effects read.
     pub composited: std::collections::BTreeSet<usize>,
     source_bytes: usize,
@@ -69,6 +72,7 @@ impl<'a> Builder<'a> {
             sheets: HashMap::new(),
             variants: HashMap::new(),
             particles: None,
+            blends: HashMap::new(),
             composited: std::collections::BTreeSet::new(),
             source_bytes: 0,
             allocated: 0,
@@ -161,9 +165,12 @@ impl<'a> Builder<'a> {
         };
         // A layer whose picture others' effects read, or that composes what's under it, is
         // drawn into a target of its own too.
-        let (step, chain) = if layer.effects.is_empty()
+        // A layer that blends is too, for its picture to be mixed with what's under it.
+        let blends = layer.image.mode != 0 && layer.particles.is_none();
+        let (mut step, chain) = if layer.effects.is_empty()
             && !self.composited.contains(&layer.object)
             && !layer.compose
+            && !blends
         {
             (own, None)
         } else {
@@ -173,6 +180,9 @@ impl<'a> Builder<'a> {
             );
             unsafe { self.chain(renderer, scene, layer, own, size)? }
         };
+        if blends {
+            step.program = unsafe { self.blend(renderer, layer.image.mode)? };
+        }
         if let Some(system) = &layer.particles {
             // A script that changes the count may ask for any number up to the most.
             let counted = scene.scripts.iter().any(|script| {
@@ -455,6 +465,22 @@ impl<'a> Builder<'a> {
         let (uploaded, _) = unsafe { upload::upload_image(self.gl, texture, image)? };
         renderer.textures.push(uploaded);
         Ok(uploaded)
+    }
+
+    /// Our program for layers blending in `mode`, made once however many do.
+    ///
+    /// # Safety
+    /// The GL context must be current on this thread.
+    unsafe fn blend(&mut self, renderer: &mut Renderer, mode: u8) -> Result<usize, Error> {
+        if let Some(&index) = self.blends.get(&mode) {
+            return Ok(index);
+        }
+        let fragment = super::blend::fragment(mode);
+        let program = unsafe { super::program(self.gl, super::VERTEX, &fragment)? };
+        renderer.programs.push(program);
+        let index = renderer.programs.len() - 1;
+        self.blends.insert(mode, index);
+        Ok(index)
     }
 
     /// The program for a fragment, shared by every fragment with the same sources, and its
