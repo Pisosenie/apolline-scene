@@ -444,3 +444,22 @@ fn scripts_see_animated_values_and_start_paused_timelines() {
     assert!((values[0][0] - 1.0).abs() < 1e-4, "{:?}", values[0]);
     assert_eq!(values[1][0], 0.0);
 }
+
+#[test]
+fn a_script_on_the_bloom_starts_from_its_strength_and_has_no_layer() {
+    let source = scripted(
+        "let first; export function init(value) { first = value; }
+         export function update() { return thisLayer === null ? first * engine.runtime : -1; }",
+    );
+    let scene = Scene::parse(&format!(
+        r#"{{"general": {{"orthogonalprojection": {{"width": 400, "height": 200}}, "bloom": true,
+            "bloomstrength": {{"script": {source}, "value": 1.5}}}},
+            "objects": [{{"image": "a.json"}}]}}"#
+    ))
+    .unwrap();
+    assert!(scene.missing().is_empty());
+    assert_eq!(scene.scripts[0].label(), "general.bloomstrength");
+    let mut stage = stage(&scene);
+    stage.tick(at(2.0));
+    assert_eq!(stage.effects().1[0][0], 3.0);
+}

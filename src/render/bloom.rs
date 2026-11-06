@@ -3,7 +3,7 @@
 //! saturated, blurred down and then across at an eighth, and added back over the frame. The
 //! blur reaches a fixed number of the screen's pixels, so it's smaller on bigger screens.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use glow::HasContext;
 
@@ -67,7 +67,9 @@ const SPREAD: f32 = 2.33;
 const STEP: f32 = 8.0;
 
 pub(super) struct Bloom {
-    settings: Settings,
+    /// How strongly it glows now, which scripts may change as the scene runs.
+    strength: Cell<f32>,
+    strength_at: Option<glow::UniformLocation>,
     bright: Program,
     blur: Program,
     add: Program,
@@ -119,12 +121,12 @@ impl Bloom {
             });
             gl.use_program(Some(bright.id));
             let uniform = |name| gl.get_uniform_location(bright.id, name);
-            gl.uniform_1_f32(uniform("strength").as_ref(), settings.strength);
             gl.uniform_1_f32(uniform("threshold").as_ref(), settings.threshold);
             let [r, g, b] = settings.tint;
             gl.uniform_3_f32(uniform("tint").as_ref(), r, g, b);
             Ok(Bloom {
-                settings,
+                strength: Cell::new(settings.strength),
+                strength_at: uniform("strength"),
                 bright,
                 blur,
                 add,
@@ -132,6 +134,15 @@ impl Bloom {
                 targets: RefCell::new(None),
             })
         }
+    }
+
+    /// Glows this strongly from the next frame on.
+    pub fn strengthen(&self, strength: f32) {
+        self.strength.set(if strength.is_finite() {
+            strength.clamp(0.0, 16.0)
+        } else {
+            0.0
+        });
     }
 
     /// Adds the bloom of `frame`, the frame drawn so far `size` big, back over it in the host's
@@ -149,7 +160,8 @@ impl Bloom {
         host: &super::state::Host,
         boxed: bool,
     ) {
-        if self.settings.strength <= 0.0 {
+        let strength = self.strength.get();
+        if strength <= 0.0 {
             return;
         }
         let mut targets = self.targets.borrow_mut();
@@ -188,6 +200,9 @@ impl Bloom {
                 gl.use_program(Some(program.id));
                 gl.uniform_2_f32(program.texel.as_ref(), texel[0], texel[1]);
                 gl.uniform_2_f32(program.along.as_ref(), along[0], along[1]);
+                if program.id == self.bright.id {
+                    gl.uniform_1_f32(self.strength_at.as_ref(), strength);
+                }
                 gl.bind_texture(glow::TEXTURE_2D, Some(source));
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }

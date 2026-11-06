@@ -148,6 +148,8 @@ pub(crate) enum Knob {
     },
     /// One of a particle system's instance overrides.
     Override(&'static str),
+    /// One of the scene's own settings.
+    Scene(&'static str),
 }
 
 impl Driven {
@@ -159,6 +161,7 @@ impl Driven {
                 name: name.clone(),
             },
             Target::Override(key) => Knob::Override(key),
+            Target::Scene(key) => Knob::Scene(key),
             _ => return None,
         };
         Some(Driven { object, knob })

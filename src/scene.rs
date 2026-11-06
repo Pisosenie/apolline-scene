@@ -93,7 +93,14 @@ pub enum Target {
     },
     /// One of a particle system's instance overrides, which scale it as it runs.
     Override(&'static str),
+    /// One of the scene's own settings, which `SCENE` stands in for the object of.
+    Scene(&'static str),
 }
+
+/// The object a script on the scene's own settings is on: none of them.
+pub(crate) const SCENE: usize = usize::MAX;
+/// The scene's settings scripts may drive.
+pub(crate) const GENERAL: &[&str] = &["bloomstrength"];
 
 impl Script {
     /// The value it's on, as a scene author would find it.
@@ -106,6 +113,7 @@ impl Script {
                 format!("effects[{effect}].passes[{pass}].{name}")
             }
             Target::Override(key) => format!("instanceoverride.{key}"),
+            Target::Scene(key) => format!("general.{key}"),
         }
     }
 }
@@ -303,7 +311,8 @@ impl Scene {
             hang(objects, &pose(&locals, &tree)),
             effects::looked_up(raw),
         );
-        let scripts = scripts(raw, &objects);
+        let mut scripts = scripts(raw, &objects);
+        scripts.extend(general_scripts(general));
         let animations = animations(raw, &objects);
         let crowded = animations.len() > MOST_TIMELINES;
         Ok(Scene {
@@ -700,6 +709,26 @@ fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
         }
     }
     found
+}
+
+/// The scripts on the scene's own settings.
+fn general_scripts(general: Option<&Value>) -> Vec<Script> {
+    GENERAL
+        .iter()
+        .filter_map(|&key| {
+            let fields = general?.get(key)?.as_object()?;
+            Some(Script {
+                object: SCENE,
+                target: Target::Scene(key),
+                source: fields.get("script")?.as_str()?.to_owned(),
+                properties: fields
+                    .get("scriptproperties")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 /// The scripts on a particle system's instance overrides.

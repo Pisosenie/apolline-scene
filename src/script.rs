@@ -254,12 +254,12 @@ impl Stage {
             Target::Shown(place) | Target::Value { effect: place, .. } => {
                 slots.get(&(object, *place)).map_or(-1, |&slot| slot as i64)
             }
-            Target::Object(_) | Target::Override(_) => -1,
+            Target::Object(_) | Target::Override(_) | Target::Scene(_) => -1,
         };
         let scripted: Vec<serde_json::Value> = scene
             .driven
             .iter()
-            .map(|value| first_value(&effects, &slots, &scene.objects, value))
+            .map(|value| first_value(&effects, &slots, scene, value))
             .collect();
         let timelines: Vec<serde_json::Value> = scene
             .animations
@@ -310,21 +310,29 @@ impl Stage {
                 let (property, shown) = match &script.target {
                     Target::Object(property) => (*property, -1),
                     Target::Shown(_) => ("", effect),
-                    Target::Value { .. } | Target::Override(_) => ("", -1),
+                    Target::Value { .. } | Target::Override(_) | Target::Scene(_) => ("", -1),
                 };
                 let valued = value_slot(script.object, &script.target);
-                // An effect's scripts see the effect as `thisObject`, the rest their layer.
-                let this = if effect >= 0 {
-                    format!("__world.effect({effect})")
+                // An effect's scripts see the effect as `thisObject`, the scene's settings' none,
+                // the rest their layer.
+                let (layer, this) = if script.object == crate::scene::SCENE {
+                    ("null".to_owned(), "null".to_owned())
+                } else if effect >= 0 {
+                    (
+                        format!("__world.layer({})", script.object),
+                        format!("__world.effect({effect})"),
+                    )
                 } else {
-                    "thisLayer".to_owned()
+                    (
+                        format!("__world.layer({})", script.object),
+                        "thisLayer".to_owned(),
+                    )
                 };
                 // The script's own names come first, on its first line, so its lines keep
                 // their numbers.
                 let source = format!(
-                    "const thisLayer = __world.layer({object}), thisObject = {this}, \
+                    "const thisLayer = {layer}, thisObject = {this}, \
                      createScriptProperties = () => __world.properties({properties});{source}",
-                    object = script.object,
                     source = script.source,
                 );
                 let loaded = Module::declare(ctx.clone(), format!("script{at}"), source)
@@ -478,10 +486,15 @@ impl Stage {
 fn first_value(
     effects: &[(usize, &crate::scene::Effect)],
     slots: &std::collections::HashMap<(usize, usize), usize>,
-    objects: &[SceneObject],
+    scene: &Scene,
     driven: &Driven,
 ) -> serde_json::Value {
     use serde_json::Value as Json;
+    // The bloom's strength, the one scene setting scripts drive, as the scene starts it.
+    if let Knob::Scene(_) = driven.knob {
+        let strength = scene.bloom.map_or(2.0, |bloom| bloom.strength);
+        return serde_json::json!([1, strength, 0, 0, 0]);
+    }
     let object = driven.object;
     let given = match &driven.knob {
         Knob::Effect { effect, pass, name } => slots.get(&(object, *effect)).and_then(|&slot| {
@@ -493,7 +506,8 @@ fn first_value(
                 .get("constantshadervalues")?
                 .get(name)
         }),
-        Knob::Override(key) => match objects.get(object) {
+        Knob::Scene(_) => None,
+        Knob::Override(key) => match scene.objects.get(object) {
             Some(SceneObject::Particles(particles)) => particles.overrides.get(*key),
             _ => None,
         },

@@ -18,6 +18,8 @@ pub(super) struct Wiring {
     /// For each instance override they drive, likewise: the particle layers it scales, which
     /// were made as their files leave them.
     tunes: Vec<Vec<(usize, &'static str)>>,
+    /// Which of them is the bloom's strength, if scripts drive it.
+    bloom: Option<usize>,
 }
 
 impl Wiring {
@@ -55,7 +57,7 @@ impl Wiring {
             .iter()
             .map(|driven| match &driven.knob {
                 Knob::Effect { effect, pass, name } => Some((driven.object, *effect, *pass, name)),
-                Knob::Override(_) => None,
+                Knob::Override(_) | Knob::Scene(_) => None,
             })
             .map(|knob| {
                 let mut found = Vec::new();
@@ -99,7 +101,16 @@ impl Wiring {
             switches,
             knobs,
             tunes,
+            bloom: scene
+                .driven
+                .iter()
+                .position(|driven| driven.knob == Knob::Scene("bloomstrength")),
         }
+    }
+
+    /// The bloom's strength as the scripts now have it, if they drive it.
+    pub fn bloom(&self, values: &[[f32; 4]]) -> Option<f32> {
+        values.get(self.bloom?).map(|value| value[0])
     }
 
     /// Shows and hides effects and sets their values as the scripts now have them; a layer

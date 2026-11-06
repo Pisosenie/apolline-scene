@@ -376,6 +376,9 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
     if let Some(general) = root.get("general").and_then(Value::as_object) {
         for (key, value) in general {
             let path = format!("general.{key}");
+            if super::GENERAL.contains(&key.as_str()) && run(value) {
+                continue;
+            }
             if nested_script(value) {
                 note(Missing::Scripted(path));
             } else {

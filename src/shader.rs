@@ -193,6 +193,12 @@ impl Template {
                 .count()
                 > 1
         };
+        // A constant no uniform in the code that runs takes is let be, as the engine does,
+        // unless one names it and wasn't read.
+        let mut named: Vec<&String> = constants
+            .keys()
+            .filter(|key| annotated(&selected, key))
+            .collect();
         let mut unplaced = false;
         let vertex = match vertex {
             Some(vertex) => {
@@ -206,6 +212,7 @@ impl Template {
                     }
                 }
                 let selected = stage(&vertex.output, &values, &controlled)?;
+                named.extend(constants.keys().filter(|key| annotated(&selected, key)));
                 let mut stage = parameters::bind(&selected, constants, missing, Stage::Vertex)?;
                 let tokens = parameters::tokens(&selected)?;
                 let named = |name: &str| tokens.iter().any(|token| token.text == name);
@@ -265,8 +272,8 @@ impl Template {
                 None
             }
         };
-        if let Some(unused) = constants
-            .keys()
+        if let Some(unused) = named
+            .into_iter()
             .find(|key| !bound.used.contains(key.as_str()))
         {
             return Err(fail(format!("unknown material constant {unused}")));
@@ -288,6 +295,14 @@ impl Template {
 }
 
 /// Every use of an identifier, under another name.
+/// Whether a uniform's annotation in `source` ties it to the material value `key`.
+fn annotated(source: &str, key: &str) -> bool {
+    let quoted = format!("\"{key}\"");
+    source
+        .lines()
+        .any(|line| line.contains("\"material\"") && line.contains(&quoted))
+}
+
 fn rename(source: &str, from: &str, to: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(source.len() + to.len() * 4);
     let mut at = 0;
@@ -777,7 +792,7 @@ mod tests {
         // A combo the shader doesn't declare is still defined, as the engine defines it.
         let undeclared = prepare("void main() {}", json!({"UNKNOWN":1}), json!({})).unwrap();
         assert!(undeclared.source.contains("#define UNKNOWN 1"));
-        assert!(prepare("void main() {}", json!({}), json!({"ignored":1})).is_err());
+        assert!(prepare("void main() {}", json!({}), json!({"ignored":1})).is_ok());
         assert!(prepare("uniform float amount;", json!({}), json!({"amount":"nan"})).is_err());
         assert!(prepare("uniform vec3 color;", json!({}), json!({"color":[1,2]})).is_err());
     }
@@ -791,8 +806,8 @@ mod tests {
         assert!(!selected.source.contains("g_LightsColor"));
         assert!(!selected.source.contains("g_Texture7"));
         assert!(prepare(source, json!({"LIVE":1}), json!({})).is_err());
-        // Explicit unused values remain errors, including values for an inactive branch.
-        assert!(prepare(source, json!({}), json!({"amount":0.5})).is_err());
+        // A value nothing declares is let be.
+        assert!(prepare(source, json!({}), json!({"amount":0.5})).is_ok());
     }
 
     #[test]
@@ -918,14 +933,24 @@ mod tests {
                 .to_string();
             assert!(error.contains(why), "{why}: {error}");
         }
-        let unused = staged(
+        // A value no uniform names is let be; one a declaration names but nothing read isn't.
+        assert!(
+            staged(
+                "void main() {}",
+                "void main() {}",
+                json!({}),
+                json!({"speed": 2})
+            )
+            .is_ok()
+        );
+        let unread = staged(
             "void main() {}",
-            "void main() {}",
+            "// uniform float g_Speed; // {\"material\":\"speed\",\"default\":1}\nvoid main() {}",
             json!({}),
             json!({"speed": 2}),
         );
         assert!(
-            unused
+            unread
                 .unwrap_err()
                 .to_string()
                 .contains("unknown material constant")

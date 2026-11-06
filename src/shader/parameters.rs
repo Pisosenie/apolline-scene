@@ -251,12 +251,19 @@ pub(super) fn bind(
                     || (rest == "Resolution" && kind == "vec4")
                 {
                     if optional.is_some_and(|missing| missing & (1 << index) != 0) {
-                        if tokens.iter().filter(|token| token.text == name).count() != 1 {
-                            return Err(fail(format!(
-                                "unbound optional texture is used by active code: {name}"
-                            )));
-                        }
-                        replacements.push((token.start, declaration[3].end, String::new()));
+                        let read = tokens.iter().filter(|token| token.text == name).count() != 1;
+                        // A texture that isn't there can't be read, but its size can: that of
+                        // one pixel, which only places coordinates nothing then samples with.
+                        let stand_in = match kind {
+                            "vec4" if read => format!("const vec4 {name} = vec4(1.0);"),
+                            _ if read => {
+                                return Err(fail(format!(
+                                    "unbound optional texture is used by active code: {name}"
+                                )));
+                            }
+                            _ => String::new(),
+                        };
+                        replacements.push((token.start, declaration[3].end, stand_in));
                     } else if tokens.iter().filter(|token| token.text == name).count() > 1 {
                         // Only a slot something reads needs binding, not one just declared.
                         inputs |= 1 << index;

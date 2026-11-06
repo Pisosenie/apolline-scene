@@ -66,7 +66,9 @@ rest, by scenes:
   `blur_h_bloom`, `combine`): a quarter size picture of what's above the threshold by its
   brightest channel, pushed away from grey and scaled by strength and tint, blurred down and
   across at an eighth over six steps of eight screen pixels each way, and added back. Our
-  own shaders do the same sums. HDR bloom (`hdr`) is still refused.
+  own shaders do the same sums. HDR bloom (`hdr`) is still refused. A script may drive
+  `bloomstrength` (audio-reactive bloom); it starts from the scene's strength and sees no
+  layer.
 - Camera zoom (`general.zoom`), 3: drawn as the whole scene scaled about its middle, nearer
   above 1. One scene's preview matches it unzoomed, so which way it goes is a guess from a
   scene that animates it from 3 down to 1 as an opening; animated zooms aren't

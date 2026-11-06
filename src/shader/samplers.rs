@@ -270,13 +270,19 @@ mod tests {
     }
 
     #[test]
-    fn contradictory_or_unbound_active_reads_cannot_silently_sample_old_gl_state() {
+    fn contradictory_or_unbound_reads_fail_but_an_unbound_size_is_one_pixel() {
         assert!(prepare(OPTIONAL, 1, json!({"MASK":1})).is_err());
         assert!(prepare(OPTIONAL, 129, json!({"MASK":0})).is_err());
         let read = "uniform sampler2D g_Texture1; // {\"combo\":\"MASK\"}\nvoid main() { gl_FragColor = texSample2D(g_Texture1, vec2(0.5)); }";
         assert!(prepare(read, 1, json!({})).is_err());
         let resolution = "uniform sampler2D g_Texture1; // {\"combo\":\"MASK\"}\nuniform vec4 g_Texture1Resolution;\nvoid main() { gl_FragColor = g_Texture1Resolution; }";
-        assert!(prepare(resolution, 1, json!({})).is_err());
+        // Its size is still read, as one pixel's.
+        let sized = prepare(resolution, 1, json!({})).unwrap();
+        assert!(
+            sized
+                .source
+                .contains("const vec4 g_Texture1Resolution = vec4(1.0);")
+        );
         assert!(prepare(OPTIONAL, 0, json!({})).is_err());
     }
 

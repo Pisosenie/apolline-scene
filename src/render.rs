@@ -370,6 +370,9 @@ impl Renderer {
         }
         let (shown, values) = stage.effects();
         self.wiring.apply(&mut self.layers, shown, values);
+        if let (Some(bloom), Some(strength)) = (&self.bloom, self.wiring.bloom(values)) {
+            bloom.strengthen(strength);
+        }
         for (object, text) in stage.written() {
             for layer in self
                 .layers

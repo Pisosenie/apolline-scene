@@ -99,7 +99,9 @@ or boolean defaults/overrides, legacy varying/gl_FragColor, common sampling/cast
 and scalar/vector material constants from annotations or constantshadervalues. Bound project
 properties are resolved before constants become GLSL literals. UV input is v_TexCoord as vec2,
 vec3 or vec4; g_Texture0 through g_Texture7 and their Resolution uniforms are provided.
-Unknown constants, unsupported dynamic uniforms, uniform arrays, unsupported texture metadata and unsupported pass
+A material constant no uniform in the selected code names is ignored, as Wallpaper Engine
+ignores it (materials keep values for uniforms their shader commented out); one a selected
+declaration names but nothing bound is refused. Unsupported dynamic uniforms, uniform arrays, unsupported texture metadata and unsupported pass
 fields refuse preparation rather than receive invented values. Multi-pass materials are
 still unsupported.
 
@@ -245,8 +247,9 @@ mask's default is the canvas painting starts from (stock masks say so with
 `paintdefaultcolor`), so an unpainted mask leaves the effect over the whole layer. A plain
 optional texture with a default still refuses unbound. A bound texture defines it as one.
 Contradictory material combo values and duplicate controllers refuse preparation. An unbound
-optional sampler/resolution declaration is removed only when selected code never references
-it; an active read is an error. Missing named files remain errors, rather than becoming an
+optional sampler declaration is removed only when selected code never references it; an
+active read is an error. Its resolution may still be read, as a 1×1 texture's: stock vertex
+shaders place the mask's coordinates with it whether or not the fragment then samples it. Missing named files remain errors, rather than becoming an
 absent mask. Default resources are resolved by Project before deriving texture toggles.
 Metadata is collected before conditional selection; ambiguous declarations in alternate branches
 with conflicting metadata remain outside this subset. Identical metadata in repeated guarded
