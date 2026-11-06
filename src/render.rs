@@ -54,6 +54,7 @@ void main() {
 const FRAGMENT: &str = "
 uniform sampler2D picture;
 uniform vec4 tint;
+uniform float power;
 uniform int picture_channels;
 in vec2 uv;
 out vec4 color;
@@ -65,6 +66,9 @@ void main() {
         pixel = vec4(pixel.rrr, pixel.g);
     }
     color = pixel * tint;
+    if (power != 1.0) {
+        color.rgb = pow(max(color.rgb, 0.0), vec3(power));
+    }
 }";
 
 #[derive(Clone)]
@@ -88,6 +92,8 @@ struct Step {
     /// place of the picture inside `uv_max`.
     sheet: Option<[f32; 6]>,
     constants: Values,
+    /// What a plain picture's colour is raised to, as its material says.
+    power: f32,
 }
 
 struct Drawn {
@@ -226,6 +232,7 @@ struct Program {
     channels: Option<glow::UniformLocation>,
     /// The screen's size, for a blending layer to find what's under each of its pixels.
     screen: Option<glow::UniformLocation>,
+    power: Option<glow::UniformLocation>,
     frame: Option<material::Frame>,
     resolution: [Option<glow::UniformLocation>; 8],
 }
@@ -798,6 +805,7 @@ unsafe fn bind(
         gl.uniform_2_f32(program.layer_size.as_ref(), size.0, size.1);
         gl.uniform_4_f32_slice(program.tint.as_ref(), &tint);
         gl.uniform_1_i32(program.channels.as_ref(), step.channels);
+        gl.uniform_1_f32(program.power.as_ref(), step.power);
         for (location, value) in &step.constants {
             material::set(gl, location.as_ref(), value);
         }
@@ -859,6 +867,7 @@ unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Pr
                 tint,
                 channels: uniform("picture_channels"),
                 screen: uniform("apolline_screen"),
+                power: uniform("power"),
                 frame: None,
                 resolution: std::array::from_fn(|_| None),
             })

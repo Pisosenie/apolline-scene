@@ -221,8 +221,19 @@ impl Template {
                 let used =
                     |name: &str| tokens.iter().filter(|token| token.text == name).count() > 1;
                 unplaced = named("a_Position") && !used("g_ModelViewProjectionMatrix");
+                // HLSL lets a stage write a wider vector than the next reads; the vertex
+                // stage's is kept under a name of its own and cut down when it's done.
+                let mut narrowed = Vec::new();
                 for varying in &bound.varyings {
                     let written = stage.varyings.iter().find(|(name, _)| *name == varying.0);
+                    if let Some(written) = written
+                        && width(&written.1)
+                            .zip(width(&varying.1))
+                            .is_some_and(|(w, r)| w > r)
+                    {
+                        narrowed.push(varying.clone());
+                        continue;
+                    }
                     if written.is_some_and(|written| written.1 != varying.1)
                         || (written.is_none() && read(&varying.0))
                     {
@@ -259,7 +270,20 @@ impl Template {
                 bound.animated |= stage.animated;
                 bound.reads = bound.reads.with(stage.reads);
                 files.extend(vertex.files);
-                Some(source(VERTEX, &values, &stage.body, VERTEX_MAIN)?)
+                for (name, _) in &narrowed {
+                    stage.body = rename(&stage.body, name, &format!("apolline_wide_{name}"))?;
+                }
+                let main = narrowed
+                    .iter()
+                    .fold(VERTEX_MAIN.to_owned(), |main, (name, kind)| {
+                        let parts = &"xyzw"[..width(kind).unwrap_or(1)];
+                        let copy = format!("    {name} = apolline_wide_{name}.{parts};\n}}");
+                        format!(
+                            "out {kind} {name};\n{}",
+                            main.replacen("\n}", &format!("\n{copy}"), 1)
+                        )
+                    });
+                Some(source(VERTEX, &values, &stage.body, &main)?)
             }
             None => {
                 // Ours fills one plain v_TexCoord, not an array of them.
@@ -302,6 +326,17 @@ fn annotated(source: &str, key: &str) -> bool {
     source
         .lines()
         .any(|line| line.contains("\"material\"") && line.contains(&quoted))
+}
+
+/// How many numbers a varying of this type holds.
+fn width(kind: &str) -> Option<usize> {
+    match kind {
+        "float" => Some(1),
+        "vec2" => Some(2),
+        "vec3" => Some(3),
+        "vec4" => Some(4),
+        _ => None,
+    }
 }
 
 fn rename(source: &str, from: &str, to: &str) -> Result<String, Error> {
@@ -963,6 +998,21 @@ mod tests {
                 .to_string()
                 .contains("unknown material constant")
         );
+    }
+
+    #[test]
+    fn a_wider_vertex_varying_is_cut_down_to_what_the_fragment_reads() {
+        let vertex = "attribute vec2 a_TexCoord;\nvarying vec4 v_TexCoord;\nvoid main() { v_TexCoord = vec4(a_TexCoord, 0.0, 1.0); }";
+        let fragment = "varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }";
+        let prepared = staged(vertex, fragment, json!({}), json!({})).unwrap();
+        let source = prepared.vertex.unwrap();
+        assert!(source.contains("out vec2 v_TexCoord;"));
+        assert!(source.contains("v_TexCoord = apolline_wide_v_TexCoord.xy;"));
+        // A narrower one still isn't written.
+        let narrow = vertex
+            .replace("vec4 v_TexCoord", "float v_TexCoord")
+            .replace("vec4(a_TexCoord, 0.0, 1.0)", "1.0");
+        assert!(staged(&narrow, fragment, json!({}), json!({})).is_err());
     }
 
     #[test]

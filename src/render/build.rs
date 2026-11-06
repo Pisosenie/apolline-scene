@@ -163,6 +163,7 @@ impl<'a> Builder<'a> {
             channels: first.channels.count() as i32,
             inputs,
             constants,
+            power: layer.power,
         };
         // A layer whose picture others' effects read, or that composes what's under it, is
         // drawn into a target of its own too.
@@ -352,6 +353,7 @@ impl<'a> Builder<'a> {
                 uv_max: [1.0; 2],
                 sheet: None,
                 constants,
+                power: 1.0,
             });
             let reads = pass
                 .reads
@@ -414,6 +416,7 @@ impl<'a> Builder<'a> {
             uv_max: [1.0; 2],
             sheet: None,
             constants: Vec::new(),
+            power: 1.0,
         };
         Ok((place, Some(chain)))
     }

@@ -47,6 +47,7 @@ pub(super) unsafe fn program(gl: &glow::Context, fragment: &Fragment) -> Result<
             tint: gl.get_uniform_location(id, "apolline_layer_tint"),
             channels: None,
             screen: None,
+            power: None,
             frame: Some(Frame::new(gl, id)),
             resolution: std::array::from_fn(|slot| {
                 gl.get_uniform_location(id, &format!("g_Texture{slot}Resolution"))

@@ -53,6 +53,7 @@ uniform sampler2D picture;
 uniform sampler2D under;
 uniform vec2 apolline_screen;
 uniform vec4 tint;
+uniform float power;
 uniform int picture_channels;
 in vec2 uv;
 out vec4 color;
@@ -121,6 +122,9 @@ void main() {
         pixel = vec4(pixel.rrr, pixel.g);
     }
     pixel *= tint;
+    if (power != 1.0) {
+        pixel.rgb = pow(max(pixel.rgb, 0.0), vec3(power));
+    }
     vec3 below = texture(under, gl_FragCoord.xy / apolline_screen).rgb;
     color = vec4(blended(below, pixel.rgb, pixel.a), 1.0);
 }";

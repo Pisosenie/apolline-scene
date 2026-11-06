@@ -188,7 +188,10 @@ fn fragment_inputs_share_decodes_and_all_count_toward_the_budget() {
     material(&["absent"], "demo");
     let (_, skipped) = project.layers(&scene);
     assert!(skipped[0].contains("required texture slots"));
-    for (names, shader) in [(vec!["same"; 9], "demo"), (vec!["same"; 2], "genericimage")] {
+    // An unlit picture's normal and PBR maps are let be; a fourth slot isn't.
+    material(&["same", "same", "same"], "genericimage");
+    assert!(project.layers(&scene).1.is_empty());
+    for (names, shader) in [(vec!["same"; 9], "demo"), (vec!["same"; 4], "genericimage")] {
         material(&names, shader);
         let (layers, skipped) = project.layers(&scene);
         assert!(layers.is_empty());

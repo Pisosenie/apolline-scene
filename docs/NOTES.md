@@ -129,7 +129,12 @@ to 256 KiB, combined input and expanded source up to 1 MiB each. Includes are ex
 GLSL conditional evaluation, so a missing include in an inactive branch also refuses this
 subset. Host macros cannot be redefined. A `max` or `min` whose first argument is a number,
 which HLSL takes and GLSL doesn't (stock `nitro` writes `max(0, albedo.rgb)`), has its
-arguments turned around in the selected source; the result is the same. There may be 64 custom materials/programs and 16 MiB
+arguments turned around in the selected source; the result is the same. A vertex stage that
+writes a wider vector than its fragment reads under one name (`vec4 v_TexCoord` read as a
+`vec2`) keeps its own under another and hands on the part read once its main is done.
+Plain image materials read `Bright` as brightness and `Power` as the power their colour is
+raised to after it, as the first `genericimage` does; their normal and PBR map slots, which
+only lighting and reflection read and which are refused, are let be. There may be 64 custom materials/programs and 16 MiB
 of prepared source per preparation/renderer. Unique GPU texture allocations have a separate
 1 GiB logical budget; it is not a whole-process RSS or exact VRAM guarantee. Driver shader
 compilation is not sandboxed or time-bounded by these source limits.

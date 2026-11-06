@@ -177,6 +177,7 @@ impl Project {
         Ok(Layer {
             object: 0,
             shade: [overbright, 1.0],
+            power: 1.0,
             image: Image {
                 name: placed.name.clone(),
                 model: placed.file.clone(),

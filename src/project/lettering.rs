@@ -49,6 +49,7 @@ impl Project {
                 ..words.layer.clone()
             },
             shade: [1.0; 2],
+            power: 1.0,
             texture: Arc::new(raster.texture),
             secondary: Vec::new(),
             fragment: None,

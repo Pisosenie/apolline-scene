@@ -50,6 +50,8 @@ pub struct Layer {
     pub image: Image,
     /// What its material multiplies its brightness and alpha by.
     pub shade: [f32; 2],
+    /// What its material raises its colour to after that.
+    pub power: f32,
     pub texture: Arc<Texture>,
     pub secondary: Vec<TextureInput>,
     pub fragment: Option<Arc<crate::shader::Fragment>>,
@@ -169,6 +171,7 @@ struct Resolved {
     blending: Blending,
     fullscreen: bool,
     shade: [f32; 2],
+    power: f32,
     solid: bool,
     sprite: bool,
     compose: bool,
@@ -510,6 +513,7 @@ impl Project {
             object: 0,
             image,
             shade: resolved.shade,
+            power: resolved.power,
             texture,
             secondary: resolved.secondary.clone(),
             fragment: resolved.fragment.clone(),
@@ -588,6 +592,7 @@ impl Project {
             blending: material.blending,
             fullscreen: flag(model.get("fullscreen")).unwrap_or(false),
             shade,
+            power: material.power,
             solid: material.solid,
             sprite: material.sprite,
             compose: material.compose,

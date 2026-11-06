@@ -18,6 +18,8 @@ pub(super) struct Material {
     pub blending: Blending,
     /// What a plain image material multiplies the layer's brightness and alpha by.
     pub shade: [f32; 2],
+    /// The power a plain image material raises its colour to after brightening it.
+    pub power: f32,
     /// A plain colour with no texture, which the layer's colour and size make.
     pub solid: bool,
     /// A plain image material that plays its texture's frames in turn.
@@ -188,6 +190,7 @@ impl Project {
                 fragment: None,
                 blending,
                 shade: [1.0; 2],
+                power: 1.0,
                 solid: true,
                 sprite: false,
                 compose: false,
@@ -207,6 +210,7 @@ impl Project {
                 fragment: None,
                 blending,
                 shade: [1.0; 2],
+                power: 1.0,
                 solid: false,
                 sprite: false,
                 compose: true,
@@ -216,7 +220,12 @@ impl Project {
             shader,
             "genericimage" | "genericimage2" | "genericimage3" | "genericimage4"
         ) {
-            let (shade, sprite) = plain(&combos, &constants)?;
+            let (shade, sprite, power) = plain(&combos, &constants)?;
+            // Its normal and PBR maps, slots 1 and 2, are read only when lit or reflecting,
+            // which `plain` refuses.
+            if names.len() <= 3 {
+                names.truncate(1);
+            }
             if names.len() != 1 {
                 return Err(Error::Format(
                     "genericimage needs exactly one texture slot".into(),
@@ -228,6 +237,7 @@ impl Project {
                 fragment: None,
                 blending,
                 shade,
+                power,
                 solid: false,
                 sprite,
                 compose: false,
@@ -239,6 +249,7 @@ impl Project {
             fragment: Some(fragment),
             blending,
             shade: [1.0; 2],
+            power: 1.0,
             solid: false,
             sprite: false,
             compose: false,
@@ -364,7 +375,7 @@ impl Project {
 fn plain(
     combos: &serde_json::Map<String, Value>,
     constants: &serde_json::Map<String, Value>,
-) -> Result<([f32; 2], bool), Error> {
+) -> Result<([f32; 2], bool, f32), Error> {
     let mut sprite = false;
     for (name, value) in combos {
         let value = crate::value::number(Some(value));
@@ -384,14 +395,16 @@ fn plain(
             )));
         }
     }
-    let mut shade = [1.0; 2];
+    // Brightness, alpha, and the power the first version raises the colour to.
+    let mut shade = [1.0, 1.0, 1.0];
     for (name, value) in constants {
         let slot = match name.as_str() {
-            "Brightness" => 0,
+            "Brightness" | "Bright" => 0,
             "Alpha" => 1,
+            "Power" => 2,
             _ => {
                 return Err(Error::Format(
-                    "genericimage values other than brightness and alpha".into(),
+                    "genericimage values other than brightness, alpha and power".into(),
                 ));
             }
         };
@@ -399,7 +412,10 @@ fn plain(
             .filter(|value| value.is_finite())
             .ok_or_else(|| Error::Format("genericimage values must be numbers".into()))?;
     }
-    Ok((shade, sprite))
+    if !(0.0..=16.0).contains(&shade[2]) {
+        return Err(Error::Format("a genericimage power out of range".into()));
+    }
+    Ok(([shade[0], shade[1]], sprite, shade[2]))
 }
 
 /// A layer's `instance` laid over its material's one pass: its combos and values added to the
