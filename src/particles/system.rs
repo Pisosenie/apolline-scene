@@ -320,7 +320,10 @@ impl System {
             .ok_or_else(|| refuse("a particle system without a material"))?
             .to_owned();
         let renderers = list(root, "renderer")?;
+        // Stock snow and light shafts leave the renderer out and draw sprites; spawners that
+        // draw nothing give an empty list.
         let renderer = match renderers {
+            [] if root.get("renderer").is_none_or(Value::is_null) => Renderer::Sprite,
             [renderer] if text(renderer.get("name")) == Some("sprite") => {
                 known(renderer, &[], "sprite renderer")?;
                 Renderer::Sprite
@@ -670,6 +673,14 @@ mod tests {
                 &format!(r#""starttime": 2, "flags": {flags}"#),
             ))
         };
+        // Without a renderer, it's drawn as sprites.
+        let unnamed = RAIN.replace(
+            r#",
+        "renderer": [{"name": "sprite"}]"#,
+            "",
+        );
+        assert!(!unnamed.contains("renderer"));
+        assert_eq!(System::parse(&unnamed).unwrap().renderer, Renderer::Sprite);
         let both = flagged(5).unwrap();
         assert!(both.world && both.perspective);
         assert!(
@@ -693,6 +704,11 @@ mod tests {
                 r#""name": "boxrandom""#,
                 r#""name": "boxrandom", "audioprocessingmode": 3"#,
                 "emitter field audioprocessingmode",
+            ),
+            (
+                r#""renderer": [{"name": "sprite"}]"#,
+                r#""renderer": []"#,
+                "renderers other",
             ),
             (
                 r#""name": "boxrandom""#,
