@@ -259,8 +259,8 @@ static and animated chains, thousands of particles), recorded per commit.
 
 ## Now
 
-Written and tested on files built in the tests and on macOS's desktop OpenGL; not one real
-Wallpaper Engine file has been read yet.
+Tested on files built in the tests, on 81 Workshop scenes on macOS's desktop OpenGL, and on 27
+on Linux with NVIDIA's driver; see STATUS.md for where each stands.
 
 - Stages 1 and 2: packages and textures with bounds on every size, still scenes with layers,
   blending and parallax, the viewer and its `--shot`.
