@@ -3,6 +3,7 @@
 //! `assets` folder, which holds the materials and shaders scenes share.
 
 mod effect;
+mod lettering;
 mod material;
 mod particle;
 
@@ -59,6 +60,8 @@ pub struct Layer {
     pub effects: Vec<EffectPass>,
     /// A particle system drawn with its texture, in place of a picture.
     pub particles: Option<Arc<crate::particles::System>>,
+    /// How a text layer's words are drawn, for when its scripts change them.
+    pub text: Option<Arc<crate::text::Lettering>>,
 }
 
 /// A texture bound to an explicit secondary sampler slot.
@@ -289,14 +292,24 @@ impl Project {
         let mut omitted = 0;
         let mut textures = material::Resources::default();
         let mut models = HashMap::new();
+        let mut fonts = HashMap::new();
         // Scripts may show a hidden layer, so a scripted scene keeps them all.
         let scripted = !scene.scripts.is_empty();
+        if scripted
+            && scene
+                .objects
+                .iter()
+                .any(|object| matches!(object, Object::Text(_)))
+        {
+            crate::text::warm();
+        }
         let shown: Vec<(usize, &Object)> = scene
             .objects
             .iter()
             .enumerate()
             .filter(|(_, object)| match object {
                 Object::Image(image) => image.visible || scripted,
+                Object::Text(text) => text.layer.visible || scripted,
                 Object::Particles(particles) => particles.visible || scripted,
                 _ => false,
             })
@@ -309,6 +322,10 @@ impl Project {
                 Object::Image(image) => (
                     &image.name,
                     self.layer(image, &mut models, &mut textures, &mut remaining, still),
+                ),
+                Object::Text(text) => (
+                    &text.layer.name,
+                    self.text_layer(text, &mut fonts, &mut textures, &mut remaining, still),
                 ),
                 Object::Particles(particles) => (
                     &particles.name,
@@ -375,6 +392,7 @@ impl Project {
             fullscreen: resolved.fullscreen,
             effects,
             particles: None,
+            text: None,
         })
     }
 

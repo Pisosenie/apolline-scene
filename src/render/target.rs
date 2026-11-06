@@ -64,6 +64,28 @@ impl Target {
         }
     }
 
+    /// A new size for what's drawn into it, keeping its names.
+    ///
+    /// # Safety
+    /// The GL context must be current on this thread.
+    pub unsafe fn resize(&self, gl: &glow::Context, size: (u32, u32)) {
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                size.0 as i32,
+                size.1 as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+    }
+
     /// # Safety
     /// The GL context must be current on this thread.
     pub unsafe fn delete(&self, gl: &glow::Context) {

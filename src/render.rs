@@ -11,6 +11,7 @@ mod state;
 mod swarm;
 mod target;
 mod upload;
+mod words;
 
 use geometry::toward;
 pub use geometry::{Affine, Fit, place, place_fitted};
@@ -92,6 +93,10 @@ struct Drawn {
     object: usize,
     base: Base,
     visible: bool,
+    /// Where its object was last put, which a change of size places it from again.
+    posed: Pose,
+    /// A text layer's words, which scripts may change.
+    words: Option<words::Words>,
 }
 
 /// How a layer is placed from where its object is.
@@ -112,6 +117,7 @@ enum Base {
 
 impl Drawn {
     fn pose(&mut self, pose: &Pose) {
+        self.posed = *pose;
         self.visible = pose.visible;
         self.angle = pose.angle;
         let shaded = |shade: [f32; 2]| {
@@ -251,8 +257,12 @@ impl Renderer {
     }
 
     /// Runs a frame of the scene's scripts, at the host's scene time, and moves, shows and
-    /// hides layers the way they say. Hosts call it before each `draw_timed`.
-    pub fn animate(&mut self, time: f32, delta: f32) {
+    /// hides layers and changes their words the way they say. Hosts call it before each
+    /// `draw_timed`.
+    ///
+    /// # Safety
+    /// `gl` has to be current on this thread, the one the renderer was made on.
+    pub unsafe fn animate(&mut self, gl: &glow::Context, time: f32, delta: f32) {
         let Some(stage) = self.stage.as_mut() else {
             return;
         };
@@ -266,6 +276,15 @@ impl Renderer {
         for layer in &mut self.layers {
             if let Some(pose) = poses.get(layer.object) {
                 layer.pose(pose);
+            }
+        }
+        for (object, text) in stage.written() {
+            for layer in self
+                .layers
+                .iter_mut()
+                .filter(|layer| layer.object == object)
+            {
+                unsafe { layer.retext(gl, &text, &mut self.texture_bytes) };
             }
         }
     }

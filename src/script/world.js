@@ -102,6 +102,9 @@ let state = new Float64Array(0);
 let names = [];
 let parents = [];
 let sizes = [];
+// Text layers' words, null for other objects, and the text layers whose words changed.
+let texts = [];
+const written = new Set();
 const layers = [];
 const scripts = [];
 let timers = [];
@@ -142,12 +145,24 @@ class Layer {
     set brightness(value) { store1(this.index, BRIGHTNESS, value); }
     get visible() { return state[this.index * STRIDE + VISIBLE] !== 0; }
     set visible(value) { store1(this.index, VISIBLE, Boolean(value)); }
+    get text() { return texts[this.index] ?? undefined; }
+    set text(value) {
+        // Bounded, and whole characters, which the host reads as UTF-8.
+        const words = String(value).slice(0, 4 * 4096).toWellFormed();
+        if (typeof texts[this.index] === 'string' && texts[this.index] !== words) {
+            texts[this.index] = words;
+            written.add(this.index);
+        }
+    }
     get size() { return new Vec2(sizes[2 * this.index], sizes[2 * this.index + 1]); }
     getParent() { return parents[this.index] < 0 ? null : layers[parents[this.index]]; }
 }
 
 const slots = { origin: ORIGIN, scale: SCALE, angles: ANGLES, color: COLOR, alpha: ALPHA, brightness: BRIGHTNESS, visible: VISIBLE };
 function read(script) {
+    if (script.property === 'text') {
+        return texts[script.object];
+    }
     const at = slots[script.property];
     if (at === VISIBLE) {
         return layers[script.object].visible;
@@ -262,8 +277,10 @@ function property(kind, value) {
 
 // Scripts can't replace what the host calls.
 Object.defineProperty(globalThis, '__world', { writable: false, configurable: false, value: Object.freeze({
-    // Objects as [name, parent index or -1, width, height] and their state, flattened.
-    setup({ objects, initial, width, height, user }) {
+    // Objects as [name, parent index or -1, width, height], their state, flattened, and
+    // their words.
+    setup({ objects, initial, words, width, height, user }) {
+        texts = words;
         names = objects.map((object) => object[0]);
         parents = objects.map((object) => object[1]);
         sizes = objects.flatMap((object) => [object[2], object[3]]);
@@ -345,6 +362,12 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
             });
         }
         return Array.from(state).concat([buffers.length > 0 ? 1 : 0]);
+    },
+    // Text layers whose words changed since this was last asked, as [object index, words].
+    written() {
+        const changed = [...written].map((index) => [String(index), texts[index]]);
+        written.clear();
+        return changed;
     },
     // Scripts that threw, as [object index, property, message]; they don't run again.
     failures: () => scripts

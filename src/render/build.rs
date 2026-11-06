@@ -35,6 +35,8 @@ fn placed(
         object: layer.object,
         base,
         visible: true,
+        posed: layer.image.pose(),
+        words: None,
     };
     drawn.pose(&layer.image.pose());
     drawn
@@ -108,6 +110,12 @@ impl<'a> Builder<'a> {
             Some(fragment) => unsafe { self.program(renderer, fragment)? },
             None => (0, Vec::new()),
         };
+        let words = layer.text.as_ref().map(|lettering| super::words::Words {
+            lettering: Arc::clone(lettering),
+            shown: None,
+            texture: inputs[0].texture,
+            bytes: super::words::bytes(&layer.texture, !layer.effects.is_empty()),
+        });
         let own = Step {
             program,
             uv_max: self.textures[&Arc::as_ptr(&layer.texture)].1,
@@ -144,7 +152,10 @@ impl<'a> Builder<'a> {
                 shade: layer.shade,
             }
         };
-        Ok(placed(step, chain, None, layer, base))
+        Ok(Drawn {
+            words,
+            ..placed(step, chain, None, layer, base)
+        })
     }
 
     /// A particle system's layer: its sprite texture through our particle program.

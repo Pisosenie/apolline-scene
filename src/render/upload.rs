@@ -12,6 +12,26 @@ pub(super) unsafe fn upload(
     gl: &glow::Context,
     texture: &Texture,
 ) -> Result<(glow::Texture, [f32; 2]), Error> {
+    unsafe {
+        let id = gl
+            .create_texture()
+            .map_err(|err| Error::Format(format!("a texture: {err}")))?;
+        match fill(gl, id, texture) {
+            Ok(uv_max) => Ok((id, uv_max)),
+            Err(error) => {
+                gl.delete_texture(id);
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Puts the texture's first image and its mipmaps in `id`, whatever was there before.
+pub(super) unsafe fn fill(
+    gl: &glow::Context,
+    id: glow::Texture,
+    texture: &Texture,
+) -> Result<[f32; 2], Error> {
     let mips = texture
         .images
         .first()
@@ -47,9 +67,6 @@ pub(super) unsafe fn upload(
                 break;
             }
         }
-        let id = gl
-            .create_texture()
-            .map_err(|err| Error::Format(format!("a texture: {err}")))?;
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(id));
         gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
@@ -96,12 +113,11 @@ pub(super) unsafe fn upload(
         );
         let error = gl.get_error();
         if error != glow::NO_ERROR {
-            gl.delete_texture(id);
             return Err(Error::Format(format!(
                 "uploading a texture failed (GL {error:#x})"
             )));
         }
-        Ok((id, uv_max))
+        Ok(uv_max)
     }
 }
 

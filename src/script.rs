@@ -44,6 +44,9 @@ pub struct Stage {
     audio: bool,
     /// The world itself was cut short, not a script in it: nothing runs any more.
     stopped: bool,
+    /// Whether the scene has text layers, and which of them have new words.
+    lettered: bool,
+    written: Vec<(usize, String)>,
 }
 
 /// What a frame of the scene's scripts sees.
@@ -105,6 +108,11 @@ impl Stage {
                 .any(|script| script.source.contains("timeOfDay")),
             audio: false,
             stopped: false,
+            lettered: scene
+                .objects
+                .iter()
+                .any(|object| matches!(object, SceneObject::Text(_))),
+            written: Vec::new(),
         };
         stage.allow(LOADING_MS);
         let failures = stage.load(scene, user)?;
@@ -148,6 +156,12 @@ impl Stage {
         &self.poses
     }
 
+    /// Text layers whose words the scripts changed since this was last asked, each once with
+    /// its latest words.
+    pub fn written(&mut self) -> Vec<(usize, String)> {
+        std::mem::take(&mut self.written)
+    }
+
     fn allow(&self, milliseconds: u64) {
         let now = self.started.elapsed().as_millis() as u64;
         self.deadline.store(now + milliseconds, Ordering::Relaxed);
@@ -173,9 +187,18 @@ impl Stage {
             })
             .collect();
         let initial: Vec<f64> = self.locals.iter().flat_map(state).collect();
+        let words: Vec<Option<&str>> = scene
+            .objects
+            .iter()
+            .map(|object| match object {
+                SceneObject::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
         let setup = serde_json::json!({
             "objects": objects,
             "initial": initial,
+            "words": words,
             "width": scene.size.0,
             "height": scene.size.1,
             "user": user,
@@ -238,7 +261,7 @@ impl Stage {
         let spectrum: Option<Vec<f32>> = moment.spectrum.map(|bins| bins.concat());
         self.allow(FRAME_MS);
         let names = &self.names;
-        let (values, failures, stopped) = self.context.with(|ctx| {
+        let (values, written, failures, stopped) = self.context.with(|ctx| {
             let fail = |error| Error::Format(format!("SceneScript: {}", caught(&ctx, error)));
             let world = world(&ctx).map_err(fail)?;
             let tick: Function = world.get("tick").map_err(fail)?;
@@ -265,6 +288,14 @@ impl Stage {
                     None
                 }
             };
+            let mut written = Vec::new();
+            if self.lettered && values.is_some() {
+                self.allow(FRAME_MS);
+                written = world
+                    .get::<_, Function>("written")
+                    .and_then(|written| written.call::<_, Vec<Vec<String>>>(()))
+                    .unwrap_or_default();
+            }
             let mut failures = Vec::new();
             if report {
                 self.allow(FRAME_MS);
@@ -285,9 +316,18 @@ impl Stage {
                     })
                     .collect();
             }
-            Ok::<_, Error>((values, failures, stopped))
+            Ok::<_, Error>((values, written, failures, stopped))
         })?;
         self.stopped |= stopped;
+        for changed in written {
+            if let [object, words] = changed.as_slice()
+                && let Ok(object) = object.parse::<usize>()
+            {
+                let words: String = words.chars().take(crate::text::CHARACTERS).collect();
+                self.written.retain(|(earlier, _)| *earlier != object);
+                self.written.push((object, words));
+            }
+        }
         if let Some(values) = values {
             let (objects, listening) = values.split_at(values.len().saturating_sub(1));
             self.audio |= listening.first().is_some_and(|&on| on != 0.0);

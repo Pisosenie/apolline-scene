@@ -17,6 +17,7 @@ demos.add_argument("--effect-demo", action="store_true", help="put effects on th
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
+demos.add_argument("--text-demo", action="store_true", help="write a title, a wrapped and cut note, and a frame counter whose script changes its words and whose effects undo each other")
 demos.add_argument("--inputs-demo", action="store_true", help="read the pointer, parallax, daytime and audio at their resting values, which leave the sky as it is")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
@@ -228,6 +229,31 @@ export function update(value) {
     brick.update({"id": 2, "parent": 1, "origin": "0 0 0", "visible": False})
     scene["objects"].insert(0, {"id": 1, "name": "stand", "origin": {"script": place, "value": "0 0 0"}})
     files["scene.json"] = json.dumps(scene).encode()
+if args.text_demo:
+    scene = json.loads(files["scene.json"])
+    count = """export function update(value) {
+    return 'Frame ' + Math.round(engine.runtime * 30) + ' of ' + value.length;
+}"""
+    scene["objects"] += [
+        {"name": "title", "text": "Apolline", "font": "fonts/words.ttf", "pointsize": 24, "origin": "960 960 0", "color": "1 0.9 0.6", "padding": 32},
+        {"name": "note", "text": "A wrapped note that runs on far longer than the two lines it is allowed to fill", "font": "fonts/words.ttf", "pointsize": 8,
+         "origin": "1820 620 0", "horizontalalign": "right", "verticalalign": "top", "padding": "0 0",
+         "limitwidth": True, "maxwidth": 520, "limitrows": True, "maxrows": 2, "limituseellipsis": True},
+        {"name": "counter", "font": "fonts/words.ttf", "pointsize": 12, "origin": "100 120 0", "horizontalalign": "left", "padding": 32,
+         "text": {"script": count, "value": "-"},
+         "effects": [{"file": "effects/invert/effect.json"}, {"file": "effects/invert/effect.json"}]},
+    ]
+    files["scene.json"] = json.dumps(scene).encode()
+    files["fonts/words.ttf"] = (Path(__file__).resolve().parent.parent / "tests/fonts/Cantarell-Regular.ttf").read_bytes()
+    files["effects/invert/effect.json"] = b'{"name": "invert", "passes": [{"material": "materials/effects/invert.json"}]}'
+    files["materials/effects/invert.json"] = b'{"passes": [{"shader": "effects/invert", "blending": "normal", "textures": [null]}]}'
+    files["shaders/effects/invert.frag"] = b'''varying vec2 v_TexCoord;
+uniform sampler2D g_Texture0;
+void main() {
+    vec4 pixel = texSample2D(g_Texture0, v_TexCoord);
+    gl_FragColor = vec4(1.0 - pixel.rgb, pixel.a);
+}
+'''
 if args.inputs_demo:
     files["materials/sky.json"] = b'{"passes": [{"shader": "demo/inputs", "textures": ["sky"], "blending": "normal"}]}'
     files["shaders/demo/inputs.frag"] = b"""varying vec2 v_TexCoord;

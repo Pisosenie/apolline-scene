@@ -12,6 +12,7 @@ pub mod scene;
 pub mod script;
 pub mod shader;
 pub mod tex;
+pub mod text;
 mod value;
 
 pub use project::{Blending, Layer, Prepared, Project, TextureInput};

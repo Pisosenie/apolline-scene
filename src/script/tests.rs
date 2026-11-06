@@ -215,3 +215,50 @@ fn promises_that_never_settle_are_cut_short_too() {
     stage.tick(at(2.0));
     assert!(begun.elapsed() < std::time::Duration::from_secs(1));
 }
+
+#[test]
+fn text_layers_words_change_through_their_scripts_and_others() {
+    let clock = scripted(
+        "let ticks = 0; export function update(value) { ticks += 1; return `${value.length}:${ticks}`; }",
+    );
+    let caption = scripted(
+        "export function update(value) { \
+         thisScene.getLayer('label').text = thisScene.getLayer('clock').text + '!'; \
+         thisScene.getLayer('picture').text = 'ignored'; \
+         return value; }",
+    );
+    let scene = scene(&format!(
+        r#"[{{"name": "clock", "text": {{"script": {clock}, "value": "ab"}}, "font": "a.ttf"}},
+            {{"name": "label", "text": "x", "font": "a.ttf"}},
+            {{"name": "picture", "image": "a.json", "origin": {{"script": {caption}, "value": "0 0 0"}}}}]"#
+    ));
+    let mut stage = stage(&scene);
+    assert_eq!(
+        stage.written(),
+        [(0, "2:1".to_owned()), (1, "2:1!".to_owned())]
+    );
+    stage.tick(at(0.5));
+    assert_eq!(
+        stage.written(),
+        [(0, "3:2".to_owned()), (1, "3:2!".to_owned())]
+    );
+}
+
+#[test]
+fn words_cut_inside_a_character_come_out_whole() {
+    let typing = scripted(
+        "export function update() { return '\\uD83D\\uDE00ok'.slice(1) + 'x'.repeat(40000); }",
+    );
+    let scene = scene(&format!(
+        r#"[{{"name": "typing", "text": {{"script": {typing}, "value": ""}}, "font": "a.ttf"}}]"#
+    ));
+    let mut stage = stage(&scene);
+    let written = stage.written();
+    assert_eq!(written.len(), 1);
+    assert!(
+        written[0].1.starts_with("\u{FFFD}ok"),
+        "{:?}",
+        &written[0].1[..8]
+    );
+    assert!(written[0].1.chars().count() <= crate::text::CHARACTERS);
+}

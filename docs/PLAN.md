@@ -43,18 +43,20 @@ A scene that uses something not done yet goes on falling back to `linux-wallpape
 ## What the first survey showed
 
 60 of the most subscribed scenes and what they pull in (81 scene projects), surveyed
-2026-11-06 with `tools/survey-set.py` and `examples/survey.rs`. Eight draw natively whole and
-match their authors' previews. What holds the rest, by scenes:
+2026-11-06 with `tools/survey-set.py` and `examples/survey.rs`. Eight drew natively whole and
+match their authors' previews; with scripts and text layers drawn, nine do. What holds the
+rest, by scenes:
 
 - SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers. Scripts
-  on objects' place and look run now (below); what keeps those scenes out is mostly their
-  text layers, scripted effect values and particle overrides, and in four scenes
-  `thisScene.createLayer`/`destroyLayer` and `getTransformMatrix`.
+  on objects' place and look and on text layers' words run now (below); what keeps those
+  scenes out is mostly scripted effect values (15), particle overrides (8), bloom and property
+  conditions, and in four scenes `thisScene.createLayer`/`destroyLayer` and
+  `getTransformMatrix`.
 - Particle system `flags`, 31, and child systems, sprite sheets, ropes and trails, 10 each.
 - Render targets (`_rt_FullFrameBuffer` and friends), 23: blend modes, composition layers.
-- Text layers, 29 (`unknown-object`). Groups, `parent` links and solid colour layers are
-  drawn since: a child's origin is in its parent's units, turned and scaled with it, and a
-  hidden parent hides it unless it disables propagation.
+- Text layers, 29 (`unknown-object`), drawn since (below). Groups, `parent` links and solid
+  colour layers are drawn too: a child's origin is in its parent's units, turned and scaled
+  with it, and a hidden parent hides it unless it disables propagation.
 - Named targets in effects (`fbos`: godrays, blur, shine), 10.
 - Big scenes over the 512 MiB texture budget, since DXT textures are decoded to RGBA.
 
@@ -112,9 +114,21 @@ back and composed through their parents, so a scripted group carries its childre
 hidden layers stay loaded for scripts to show. Cursor and media events never come. A script
 that throws or asks for what isn't here refuses the scene with the member it asked for; one
 that throws later just stops. Next: scripted effect values and particle overrides (uniforms
-and emitter rates per frame), `getTransformMatrix`, then text layers.
+and emitter rates per frame), then `getTransformMatrix`.
 
-**E. Timeline animations**, **text layers**, **G. puppet warp**: each once its storage is known
+**Text layers**, done: words in the project's font, or a system font (`systemfont_arial` and
+the rest found on the machine or a look-alike with its widths, else Wallpaper Engine's own Noto
+Sans or Roboto Mono), drawn into a texture and placed like a picture, so effects and parents
+work on them. Sizes follow Wallpaper Engine's, checked against the sizes its editor saved in
+real scenes: a point is 1/300 inch, a line the font's ascent, descent and gap, padding clear
+room outside the words, and the alignment the side of the words the origin is on. Lines wrap
+at `maxwidth`, stop at `maxrows`, with an ellipsis if asked; characters the font lacks come from
+the machine's wide font. A script on `text`, or `thisLayer.text`, changes the words; the
+texture and its effect targets are drawn again at the new size. Opaque backgrounds, letter
+spacing and block alignment are refused; `anchor` (keeping a layer by a screen edge on
+screens shaped unlike the scene) is ignored.
+
+**E. Timeline animations**, **G. puppet warp**: each once its storage is known
 from real files. 3D scenes,
 lights and models are not planned.
 

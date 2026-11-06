@@ -53,6 +53,25 @@ impl Chain {
         }
     }
 
+    /// The layer's own step, which reads its picture.
+    pub fn own(&mut self) -> &mut Step {
+        &mut self.steps[0]
+    }
+
+    /// Draws at a new size from here on, into the same textures.
+    ///
+    /// # Safety
+    /// The GL context must be current on this thread.
+    pub unsafe fn resize(&mut self, gl: &glow::Context, size: (u32, u32)) {
+        if size != self.size {
+            for target in &self.targets {
+                unsafe { target.resize(gl, size) };
+            }
+            self.size = size;
+        }
+        self.drawn.set(None);
+    }
+
     /// The texture the last step draws into, which holds the layer's finished picture.
     pub fn result(&self) -> glow::Texture {
         self.targets[(self.steps.len() - 1) % 2].texture

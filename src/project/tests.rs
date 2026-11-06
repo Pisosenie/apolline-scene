@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod effects;
 mod particles;
+mod text;
 
 fn texture(width: u32, height: u32) -> Vec<u8> {
     texture_format(width, height, 0, 4)

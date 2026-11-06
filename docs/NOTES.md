@@ -21,12 +21,24 @@ These are separate allocation limits, not a guarantee that total process RSS sta
 ## Scripts
 
 `Prepared::stage()` loads the scene's scripts afresh for one renderer, which runs them through
-`Renderer::script(stage)`; the host calls `Renderer::animate(time, delta)` before each
-`draw_timed`, and `Renderer::needs` includes the time of day and audio when scripts read them.
+`Renderer::script(stage)`; the host calls `Renderer::animate(gl, time, delta)` before each
+`draw_timed`, with the context current, since new words are drawn into their textures there.
+`Renderer::needs` includes the time of day and audio when scripts read them.
 Scripts that fail to load or throw in their first frame refuse the scene in `prepare`. Each
 renderer has its own QuickJS runtime with a 64 MiB heap, a 1 MiB stack and 50 ms a frame; a
 script cut short or throwing later stops, the rest go on. Scenes with scripts keep hidden
 layers loaded, since a script may show them. `prepare_still` refuses them.
+
+## Text layers
+
+A text layer's words are drawn on the CPU with `ab_glyph` into a white RG8 texture holding
+their coverage, with mipmaps, and placed like a picture with the layer's colour as tint. Without
+effects they are drawn finer than scene pixels, up to four texels each by their scale, so text
+scaled up stays sharp; with effects a texel is a scene pixel, as the effects expect. A texture
+is at most 4096 texels on a side and 4 Mi in all, and at most 4096 characters are drawn. Fonts
+are read once per preparation, up to 64 MiB each; the machine's fonts are indexed once a
+process, by file name, from the usual folders. When a script changes the words they are drawn
+again into the same texture, and a chain's targets take the new size.
 
 ## User properties
 

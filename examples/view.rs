@@ -324,7 +324,7 @@ impl ApplicationHandler for View {
                 let moving = open.renderer.follow(self.pointer, seconds);
                 let size = open.window.inner_size();
                 let time = open.started.elapsed().as_secs_f32();
-                open.renderer.animate(time, seconds.min(0.25));
+                unsafe { open.renderer.animate(&open.gl, time, seconds.min(0.25)) };
                 unsafe {
                     open.renderer.draw_timed(
                         &open.gl,
@@ -371,7 +371,7 @@ fn shoot(
     let frames = (time * 30.0).ceil().clamp(1.0, 1800.0) as u32;
     for frame in 1..=frames {
         let at = time * frame as f32 / frames as f32;
-        open.renderer.animate(at, time / frames as f32);
+        unsafe { open.renderer.animate(&open.gl, at, time / frames as f32) };
     }
     let gl = &open.gl;
     let mut pixels = vec![0u8; w as usize * h as usize * 4];

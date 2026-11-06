@@ -152,6 +152,56 @@ pub(crate) const ALIGNMENTS: &[&str] = &[
     "bottomright",
 ];
 
+/// Text layer keys that are read, or are the editor's own bookkeeping as on image layers:
+/// `size` is the box the editor last measured, `anchor` keeps a layer by an edge of screens
+/// shaped unlike the scene, and the background is drawn only when it's opaque.
+const TEXT: &[&str] = &[
+    "alpha",
+    "anchor",
+    "angles",
+    "backgroundbrightness",
+    "backgroundcolor",
+    "blockalign",
+    "brightness",
+    "castshadow",
+    "clampuvs",
+    "color",
+    "colorBlendMode",
+    "copybackground",
+    "dependencies",
+    "depthtest",
+    "disablepropagation",
+    "effects",
+    "font",
+    "horizontalalign",
+    "id",
+    "image",
+    "ledsource",
+    "limitrows",
+    "limituseellipsis",
+    "limitwidth",
+    "locktransforms",
+    "maxrows",
+    "maxwidth",
+    "model",
+    "name",
+    "opaquebackground",
+    "origin",
+    "padding",
+    "parallaxDepth",
+    "parent",
+    "particle",
+    "perspective",
+    "pointsize",
+    "scale",
+    "size",
+    "solid",
+    "spacing",
+    "text",
+    "verticalalign",
+    "visible",
+];
+
 /// Particle system keys that are read, or are the editor's own bookkeeping.
 const PARTICLES: &[&str] = &[
     "angles",
@@ -237,10 +287,13 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             continue;
         };
         let set = |key: &str| fields.get(key).is_some_and(|value| !value.is_null());
+        let lettered = !set("particle") && !set("image") && set("text");
         let known = if set("particle") {
             PARTICLES
         } else if set("image") {
             IMAGE
+        } else if lettered {
+            TEXT
         } else if !["model", "text", "sound", "light"]
             .iter()
             .any(|key| set(key))
@@ -274,11 +327,13 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         if fields.get("model").is_some_and(|model| !model.is_null()) {
             note(Missing::Setting("3D models"));
         }
+        if lettered {
+            words(fields, &mut note);
+        }
         for (key, value) in fields {
-            if super::SCRIPTABLE.contains(&key.as_str())
-                && known.contains(&key.as_str())
-                && run(value)
-            {
+            let scriptable =
+                super::SCRIPTABLE.contains(&key.as_str()) || (lettered && key == "text");
+            if scriptable && known.contains(&key.as_str()) && run(value) {
                 continue;
             }
             let path = format!("objects[{at}].{key}");
@@ -306,6 +361,34 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         note(Missing::Conditional);
     }
     found
+}
+
+/// What a text layer asks for that isn't drawn yet.
+fn words(fields: &serde_json::Map<String, Value>, note: &mut impl FnMut(Missing)) {
+    let field = |name: &str| fields.get(name);
+    let side =
+        |name: &str, sides: &[&str]| text(field(name)).is_none_or(|side| sides.contains(&side));
+    if !side("horizontalalign", &["left", "center", "right"])
+        || !side("verticalalign", &["top", "center", "bottom"])
+    {
+        note(Missing::Setting("text aligned in an unknown way"));
+    }
+    let anchors = ["none", "center", "left", "right", "top", "bottom"];
+    if text(field("anchor")).is_some_and(|anchor| !anchors.contains(&anchor)) {
+        note(Missing::Setting("text anchored in an unknown way"));
+    }
+    if text(field("font")).is_none_or(str::is_empty) {
+        note(Missing::Setting("text without a font"));
+    }
+    if flag(field("opaquebackground")) == Some(true) {
+        note(Missing::Setting("text on a background"));
+    }
+    if flag(field("blockalign")) == Some(true) {
+        note(Missing::Setting("text aligned as a block"));
+    }
+    if crate::value::vector(field("spacing"), [0.0; 2]) != [0.0; 2] {
+        note(Missing::Setting("spaced-out text"));
+    }
 }
 
 /// A value object with more than `user` and `value` in it: an animation, a script or
@@ -397,6 +480,29 @@ mod tests {
             assert!(found.contains(&missing), "{missing} not in {found:?}");
         }
         assert_eq!(Missing::Animated("x".into()).code(), "animated");
+    }
+
+    #[test]
+    fn text_layers_refuse_what_their_words_dont_draw() {
+        let scene = json!({"objects": [
+            {"text": {"script": "export function update(v) { return v; }", "value": "a"},
+             "font": "fonts/a.ttf", "opaquebackground": true, "horizontalalign": "justify",
+             "spacing": "2 0", "blockalign": true, "wobble": 1, "anchor": "middle"},
+            {"text": "b", "font": "", "maxwidth": {"value": 10, "animation": {"frames": []}}}
+        ]});
+        assert_eq!(
+            refusals(&scene),
+            [
+                Missing::UnknownKey("objects[0].wobble".into()),
+                Missing::Setting("text aligned in an unknown way"),
+                Missing::Setting("text anchored in an unknown way"),
+                Missing::Setting("text on a background"),
+                Missing::Setting("text aligned as a block"),
+                Missing::Setting("spaced-out text"),
+                Missing::Setting("text without a font"),
+                Missing::Animated("objects[1].maxwidth".into()),
+            ]
+        );
     }
 
     #[test]
