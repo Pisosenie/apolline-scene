@@ -61,6 +61,10 @@ rest, by scenes:
   colour layers are drawn too: a child's origin is in its parent's units, turned and scaled
   with it, and a hidden parent hides it unless it disables propagation.
 - Named targets in effects (`fbos`: godrays, blur, shine), 10.
+- Camera zoom (`general.zoom`), 3: drawn as the whole scene scaled about its middle, nearer
+  above 1. One scene's preview matches it unzoomed, so which way it goes is a guess from a
+  scene that animates it from 3 down to 1 as an opening; animated zooms aren't
+  played yet.
 - Big scenes over the 512 MiB texture budget, since DXT textures are decoded to RGBA.
 
 Guesses it confirmed: pictures carry the clamp flag; particle key names; `VERSION` being the

@@ -233,6 +233,8 @@ pub struct Renderer {
     /// How far in front of the scene its camera is, in scene pixels, for what's drawn in
     /// perspective.
     camera: f32,
+    /// How much nearer the camera brings the scene, about its middle.
+    zoom: f32,
     /// Where the parallax has got to on its way to the pointer, -1..1 across the target.
     eye: [f32; 2],
     inputs: Box<material::Inputs>,
@@ -273,6 +275,7 @@ impl Renderer {
             parallax: scene.parallax,
             shake: scene.shake,
             camera: scene.size.1 / 2.0 / (scene.fov.to_radians() / 2.0).tan(),
+            zoom: scene.zoom,
             eye: [0.0; 2],
             inputs: Box::default(),
             stage: None,
@@ -614,7 +617,9 @@ impl Renderer {
         fit: Fit,
     ) -> (Affine, (f32, f32)) {
         let moved = [shift[0] * layer.depth[0], shift[1] * layer.depth[1]];
-        match &layer.swarm {
+        // Zooming scales the whole placement, which is centred on the scene's middle.
+        let zoomed = |affine: Affine| affine.map(|row| row.map(|value| value * self.zoom));
+        let (affine, size) = match &layer.swarm {
             // Particles are placed in scene units over the whole scene.
             Some(_) => {
                 let centre = [self.size.0 / 2.0 + moved[0], self.size.1 / 2.0 + moved[1]];
@@ -628,7 +633,8 @@ impl Renderer {
                     layer.size,
                 )
             }
-        }
+        };
+        (zoomed(affine), size)
     }
 
     /// # Safety

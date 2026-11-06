@@ -240,7 +240,10 @@ contract.
 
 For sampler metadata with combo, Project preparation derives the toggle from actual bindings
 before selecting conditional code. Plain optional textures omit the toggle when absent;
-opacitymask/rgbmask/flowmask modes define it as zero. A bound texture defines it as one.
+opacitymask/rgbmask/flowmask modes define it as zero, whatever their `default` says: a
+mask's default is the canvas painting starts from (stock masks say so with
+`paintdefaultcolor`), so an unpainted mask leaves the effect over the whole layer. A plain
+optional texture with a default still refuses unbound. A bound texture defines it as one.
 Contradictory material combo values and duplicate controllers refuse preparation. An unbound
 optional sampler/resolution declaration is removed only when selected code never references
 it; an active read is an error. Missing named files remain errors, rather than becoming an

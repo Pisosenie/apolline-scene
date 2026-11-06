@@ -275,7 +275,7 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         if flag(field("clearenabled")) == Some(false) {
             note(Missing::Setting("a scene that isn't cleared"));
         }
-        if number(field("zoom")).is_some_and(|zoom| (zoom - 1.0).abs() > 1e-4) {
+        if number(field("zoom")).is_some_and(|zoom| !super::ZOOMS.contains(&zoom)) {
             note(Missing::Setting("camera zoom"));
         }
     }
@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn what_isnt_understood_is_named() {
         let scene = json!({
-            "general": {"bloom": true, "mystery": 1, "zoom": 2},
+            "general": {"bloom": true, "mystery": 1, "zoom": 20},
             "objects": [{"image": "a.json", "wobble": 3, "colorBlendMode": 9,
                          "origin": {"value": "0 0 0", "animation": {"frames": []}}}]
         });

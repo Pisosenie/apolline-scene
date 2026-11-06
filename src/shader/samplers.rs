@@ -106,10 +106,13 @@ pub(super) fn resolve(
         }
         let bound = bindings & (1 << slot) != 0;
         if !bound {
-            // An opacity mask white by default masks nothing, as no mask doesn't.
-            let neutral = annotation.get("mode").and_then(Value::as_str) == Some("opacitymask")
-                && annotation.get("default").and_then(Value::as_str) == Some("util/white");
-            if !neutral
+            // A painted mask's default is the canvas painting starts from; none painted leaves
+            // its combo off.
+            let painted = matches!(
+                annotation.get("mode").and_then(Value::as_str),
+                Some("opacitymask" | "rgbmask" | "flowmask")
+            );
+            if !painted
                 && annotation
                     .get("default")
                     .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
@@ -321,5 +324,16 @@ mod tests {
         .unwrap();
         assert!(painted.animated);
         assert!(painted.source.contains("#define MASK 0"));
+        // A mask's default is the canvas painting starts from: unpainted, it's off all the same.
+        let canvas = source.replace(
+            "\"combo\":\"MASK\"",
+            "\"combo\":\"MASK\",\"mode\":\"opacitymask\",\"default\":\"util/black\"",
+        );
+        assert!(
+            prepare(&canvas, 1, json!({}))
+                .unwrap()
+                .source
+                .contains("#define MASK 0")
+        );
     }
 }

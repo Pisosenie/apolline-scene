@@ -27,6 +27,8 @@ pub struct Scene {
     pub shake: Option<Shake>,
     /// How wide the camera sees up and down, in degrees, for what's drawn in perspective.
     pub fov: f32,
+    /// How much nearer the camera brings the scene, about its middle.
+    pub zoom: f32,
     pub objects: Vec<Object>,
     /// Scripts on objects' places and looks and on their effects, in the order they run.
     pub scripts: Vec<Script>,
@@ -242,6 +244,8 @@ pub struct Particles {
 }
 
 const DEFAULT_SIZE: (f32, f32) = (1920.0, 1080.0);
+/// The camera zooms the scene is drawn at.
+pub(crate) const ZOOMS: std::ops::RangeInclusive<f32> = 0.1..=10.0;
 
 impl Scene {
     pub fn parse(json: &str) -> Result<Self, Error> {
@@ -302,6 +306,9 @@ impl Scene {
             fov: number(field("fov"))
                 .filter(|fov| *fov > 1.0 && *fov < 170.0)
                 .unwrap_or(50.0),
+            zoom: number(field("zoom"))
+                .filter(|zoom| ZOOMS.contains(zoom))
+                .unwrap_or(1.0),
             driven: effects::driven(&scripts, &animations),
             scripts,
             animations,
@@ -750,6 +757,19 @@ mod tests {
         assert_eq!((images[1].alpha, images[1].visible), (0.6, false));
         assert_eq!(images[1].effects.len(), 1);
         assert_eq!(scene.missing(), []);
+    }
+
+    #[test]
+    fn the_camera_zooms_within_bounds() {
+        let zoomed = |zoom: &str| {
+            let json = format!(
+                r#"{{"general": {{"orthogonalprojection": {{"width": 10, "height": 10}}, "zoom": {zoom}}}, "objects": []}}"#
+            );
+            let scene = Scene::parse(&json).unwrap();
+            (scene.zoom, scene.missing().is_empty())
+        };
+        assert_eq!(zoomed("1.13"), (1.13, true));
+        assert_eq!(zoomed("40"), (1.0, false));
     }
 
     #[test]
