@@ -74,12 +74,14 @@ const CHILD: &[&str] = &[
     "type",
 ];
 
-/// How each particle is drawn: a sprite facing the screen, or one stretched along the way it
-/// goes, `length` times its speed long between `min` and `max` times its size.
+/// How each particle is drawn: a sprite facing the screen, one stretched along the way it
+/// goes, `length` times its speed long between `min` and `max` times its size, or a rope
+/// behind it along the way it came over the last `length` seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Renderer {
     Sprite,
     Trail { length: f32, min: f32, max: f32 },
+    Rope { length: f32 },
 }
 
 /// How a particle shows a sprite sheet: a frame picked at random when it's let out, or the
@@ -416,6 +418,14 @@ impl System {
                     length: field("length", 0.05),
                     min,
                     max: field("maxlength", 10.0).max(min),
+                }
+            }
+            [renderer] if text(renderer.get("name")) == Some("ropetrail") => {
+                known(renderer, &["length"], "rope trail renderer")?;
+                Renderer::Rope {
+                    length: number(renderer.get("length"))
+                        .filter(|length| (0.0..=60.0).contains(length))
+                        .unwrap_or(1.0),
                 }
             }
             _ => return Err(refuse("particle renderers other than one sprite or trail")),
@@ -771,6 +781,16 @@ mod tests {
                 &format!(r#""starttime": 2, "flags": {flags}"#),
             ))
         };
+        // A rope trail reads its length; a fading one isn't drawn yet.
+        let roped =
+            |renderer: &str| System::parse(&RAIN.replace(r#"[{"name": "sprite"}]"#, renderer));
+        assert_eq!(
+            roped(r#"[{"name": "ropetrail", "length": 0.2}]"#)
+                .unwrap()
+                .renderer,
+            Renderer::Rope { length: 0.2 }
+        );
+        assert!(roped(r#"[{"name": "ropetrail", "length": 0.5, "fadealpha": true}]"#).is_err());
         // Without a renderer, it's drawn as sprites.
         let unnamed = RAIN.replace(
             r#",

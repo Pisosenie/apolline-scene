@@ -222,8 +222,14 @@ impl Swarm {
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
         let (middle, distance) = camera;
         for particle in particles {
-            let x = particle.position[0] * scale[0];
-            let y = particle.position[1] * scale[1];
+            let [vx, vy, _] = particle.velocity();
+            // A rope lies behind its particle, as far back as it has come in its length.
+            let back = match renderer {
+                Renderer::Rope { length } => length.min(particle.age()),
+                _ => 0.0,
+            };
+            let x = (particle.position[0] - vx * back * 0.5) * scale[0];
+            let y = (particle.position[1] - vy * back * 0.5) * scale[1];
             let at = [origin[0] + cos * x - sin * y, origin[1] + sin * x + cos * y];
             let depth = if perspective {
                 particle.position[2] * scale[2]
@@ -233,20 +239,27 @@ impl Swarm {
             let (at, near) = seen(at, depth, middle, distance);
             let ([now, next], onward) =
                 frames(self.corners.len(), particle.sheet(sheet), sheet, crisp);
+            let width = particle.size * scale[0].abs() * near;
             let (turn, stretch) = match renderer {
                 Renderer::Sprite => (particle.rotation + angle, self.ratio),
                 Renderer::Trail { length, min, max } => {
-                    let [vx, vy, _] = particle.velocity();
                     let (heading, long) =
                         trail([vx * scale[0], vy * scale[1]], angle, [length, min, max]);
                     (heading, long * self.ratio)
+                }
+                // Its picture runs from end to end, a width past each.
+                Renderer::Rope { .. } => {
+                    let (heading, _) =
+                        trail([vx * scale[0], vy * scale[1]], angle, [0.0, 0.0, 0.0]);
+                    let reach = (vx * scale[0]).hypot(vy * scale[1]) * back * near;
+                    (heading, (reach + width) / width.max(1e-6))
                 }
             };
             let (now, next) = (self.corners[now], self.corners[next]);
             for value in [
                 at[0],
                 at[1],
-                particle.size * scale[0].abs() * near,
+                width,
                 turn,
                 particle.color[0],
                 particle.color[1],

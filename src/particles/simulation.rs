@@ -39,6 +39,11 @@ impl Particle {
         self.velocity
     }
 
+    /// Seconds since it was let out.
+    pub fn age(&self) -> f32 {
+        self.age
+    }
+
     /// How far through a sprite sheet it is, 0 to 1: its frame's place among the frames, and
     /// how far on to the next.
     pub fn sheet(&self, sheet: Sheet) -> f32 {

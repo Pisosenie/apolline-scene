@@ -131,7 +131,11 @@ burst when one is born, its rate while it lives, `origin` away. Without the worl
 particles move with the one they came from and go when it dies (a shooting star's glow); with
 it they stay where they were let out (a firefly's trail). The child's `maxcount` bounds all of
 them together, and its own `starttime` gives way to its parent's. Children let out when
-particles are born or die (`eventspawn`, `eventdeath`) are still refused. Turbulence is drawn both ways the documentation gives it: a
+particles are born or die (`eventspawn`, `eventdeath`) are still refused. A rope trail
+(`ropetrail`) is drawn as one strip from its particle back along its velocity for `length`
+seconds, or its age if younger, its picture running end to end a width past each: the path it
+came along, straightened. Ropes through a system's particles (`rope`), and rope trails that fade
+or bend in segments (`fadealpha`, `segments`, `subdivision`), are still refused. Turbulence is drawn both ways the documentation gives it: a
 turbulent start (`turbulentvelocityrandom`) turns its forward direction by `offset` radians
 (stock leaves fall with 3) and by noise over when each particle is born, up to `scale` half
 turns; the `turbulence` operator pushes each particle every second by noise over its place
