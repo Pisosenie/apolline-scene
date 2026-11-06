@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use super::system::{Between, Operator, Shape, Sheet, Swing, System};
+use super::noise;
+use super::system::{Between, Operator, Shape, Sheet, Swing, System, Turbulent};
 
 /// Simulated in steps of a sixtieth of a second, whatever the frame rate.
 const RATE: f64 = 60.0;
@@ -23,7 +24,7 @@ pub struct Particle {
     born: Look,
     /// The frame of a sprite sheet it shows, 0 to 1, when the system picks one at random.
     pick: f32,
-    /// What its oscillations draw their frequency, scale and phase from.
+    /// What its oscillations and turbulence draw their own numbers from.
     seed: u64,
 }
 
@@ -68,6 +69,8 @@ pub struct Simulation {
     /// Seconds the host has moved it on, and the steps taken for them.
     elapsed: f64,
     steps: u64,
+    /// Steps taken since it started, warming up included, which turbulence moves with.
+    taken: u64,
 }
 
 impl Simulation {
@@ -81,6 +84,7 @@ impl Simulation {
             particles: Vec::new(),
             elapsed: 0.0,
             steps: 0,
+            taken: 0,
         };
         simulation.restart();
         simulation
@@ -93,6 +97,7 @@ impl Simulation {
         self.owed.iter_mut().for_each(|owed| *owed = 0.0);
         self.elapsed = 0.0;
         self.steps = 0;
+        self.taken = 0;
         for at in 0..self.system.emitters.len() {
             for _ in 0..self.system.emitters[at].burst {
                 if self.particles.len() < self.system.max {
@@ -173,9 +178,14 @@ impl Simulation {
                 }
             }
         }
+        let world = World {
+            seed: self.seed,
+            now: self.taken as f64 / RATE,
+        };
         for particle in &mut self.particles {
-            live(particle, &system.operators);
+            live(particle, &system.operators, world);
         }
+        self.taken += 1;
     }
 
     fn spawn(&mut self, emitter: usize) -> Particle {
@@ -209,6 +219,10 @@ impl Simulation {
         let rotation = self.within(spawn.rotation);
         let born = Look { size, alpha, color };
         let mut velocity = self.within(spawn.velocity);
+        if let Some(turbulent) = spawn.turbulent {
+            let push = self.turbulent(turbulent);
+            velocity = [0, 1, 2].map(|axis| velocity[axis] + push[axis]);
+        }
         // A sphere's particles also fly out from its centre.
         if emitter.shape == Shape::Sphere && emitter.speed != [0.0; 2] {
             let length = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -236,17 +250,39 @@ impl Simulation {
             } else {
                 0.0
             },
-            seed: if system
-                .operators
-                .iter()
-                .any(|operator| matches!(operator, Operator::Oscillate { .. }))
-            {
+            seed: if system.operators.iter().any(|operator| {
+                matches!(
+                    operator,
+                    Operator::Oscillate { .. } | Operator::Turbulence { .. }
+                )
+            }) {
                 self.random = self.random.wrapping_add(0x9E37_79B9_7F4A_7C15);
                 self.random
             } else {
                 0
             },
         }
+    }
+
+    /// A turbulent start: `forward` turned in the scene's plane by its offset and by noise
+    /// over when the particle is born.
+    fn turbulent(&mut self, turbulent: Turbulent) -> [f32; 3] {
+        let phase = self.uniform(turbulent.phase[0], turbulent.phase[1]);
+        let speed = self.uniform(turbulent.speed[0], turbulent.speed[1]);
+        let at = self.taken as f64 / RATE * f64::from(turbulent.timescale) + f64::from(phase);
+        let swing = noise::noise(self.seed, [at, 0.5, 0.5]);
+        let turn = turbulent.offset + turbulent.scale * std::f32::consts::PI * swing;
+        let [x, y, z] = turbulent.forward;
+        let length = (x * x + y * y + z * z).sqrt();
+        if length < 1e-6 {
+            return [0.0; 3];
+        }
+        let (sin, cos) = turn.sin_cos();
+        [
+            (x * cos - y * sin) / length * speed,
+            (x * sin + y * cos) / length * speed,
+            z / length * speed,
+        ]
     }
 
     /// xorshift64*: small, fast and the same everywhere.
@@ -277,8 +313,15 @@ impl Simulation {
     }
 }
 
+/// What every particle's step shares: the system's seed and how long it has run.
+#[derive(Clone, Copy)]
+struct World {
+    seed: u64,
+    now: f64,
+}
+
 /// One step of a particle's life under the system's operators.
-fn live(particle: &mut Particle, operators: &[Operator]) {
+fn live(particle: &mut Particle, operators: &[Operator], world: World) {
     let t = (particle.age / particle.life).clamp(0.0, 1.0);
     let mut size = 1.0;
     let mut alpha = 1.0;
@@ -323,6 +366,26 @@ fn live(particle: &mut Particle, operators: &[Operator]) {
                             *position += offset(t) - offset(before);
                         }
                     }
+                }
+            }
+            Operator::Turbulence {
+                scale,
+                timescale,
+                speed,
+                phase,
+                mask,
+                blend,
+            } => {
+                let pick = |which: u64, range: [f32; 2]| {
+                    range[0] + (range[1] - range[0]) * hashed(particle.seed, at as u64 * 8 + which)
+                };
+                let scale = f64::from(scale);
+                let along = world.now * f64::from(timescale) + f64::from(pick(0, phase));
+                let [x, y, z] = particle.position.map(|value| f64::from(value) * scale);
+                let push = noise::field(world.seed, [x, y, z + along]);
+                let strength = pick(1, speed) * fade(t, blend) * STEP;
+                for ((velocity, push), mask) in particle.velocity.iter_mut().zip(push).zip(mask) {
+                    *velocity += push * mask * strength;
                 }
             }
             Operator::Movement { gravity, drag } => {
@@ -421,6 +484,88 @@ mod tests {
                      {"name": "sizechange", "startvalue": 1, "endvalue": 0}],
         "renderer": [{"name": "sprite"}]
     }"#;
+
+    fn turbulent(initializer: &str, operator: &str) -> Arc<System> {
+        system(&format!(
+            r#"{{"material": "m.json", "maxcount": 200,
+                "emitter": [{{"name": "sphererandom", "rate": 60}}],
+                "initializer": [{{"name": "lifetimerandom", "min": 2, "max": 2}}, {initializer}],
+                "operator": [{{"name": "movement"}}{operator}],
+                "renderer": [{{"name": "sprite"}}]}}"#
+        ))
+    }
+
+    #[test]
+    fn turbulent_starts_turn_forward_by_their_offset_and_noise() {
+        let heading = |initializer: &str| {
+            let mut simulation = Simulation::new(turbulent(initializer, ""), 3);
+            simulation.advance(1.0);
+            simulation
+                .particles()
+                .iter()
+                .map(|particle| {
+                    let [x, y, _] = particle.velocity();
+                    (y.atan2(x), x.hypot(y))
+                })
+                .collect::<Vec<_>>()
+        };
+        // Straight up at their own speed when nothing turns them; a half turn sends them down.
+        let up = heading(
+            r#"{"name": "turbulentvelocityrandom", "scale": 0, "speedmin": 50, "speedmax": 60}"#,
+        );
+        assert!(up.iter().all(|&(angle, speed)| {
+            (angle - std::f32::consts::FRAC_PI_2).abs() < 1e-4 && (50.0..=60.0).contains(&speed)
+        }));
+        let down =
+            heading(r#"{"name": "turbulentvelocityrandom", "scale": 0, "offset": 3.14159265}"#);
+        assert!(
+            down.iter()
+                .all(|&(angle, _)| (angle + std::f32::consts::FRAC_PI_2).abs() < 1e-3)
+        );
+        // Noise sways them within a tenth of a half turn, not all the same way.
+        let swaying =
+            heading(r#"{"name": "turbulentvelocityrandom", "scale": 0.1, "timescale": 2}"#);
+        let angles: Vec<f32> = swaying.iter().map(|&(angle, _)| angle).collect();
+        assert!(
+            angles
+                .iter()
+                .all(|angle| (angle - std::f32::consts::FRAC_PI_2).abs()
+                    <= 0.1 * std::f32::consts::PI + 1e-4)
+        );
+        assert!(angles.iter().any(|angle| (angle - angles[0]).abs() > 1e-3));
+    }
+
+    #[test]
+    fn turbulence_pushes_particles_only_along_its_mask() {
+        let still = r#"{"name": "velocityrandom", "min": "0 0 0", "max": "0 0 0"}"#;
+        let mut simulation = Simulation::new(
+            turbulent(
+                still,
+                r#", {"name": "turbulence", "mask": "1 0 0", "scale": 0.01, "speedmin": 400, "speedmax": 400}"#,
+            ),
+            5,
+        );
+        simulation.advance(1.0);
+        let particles = simulation.particles();
+        assert!(
+            particles
+                .iter()
+                .all(|particle| particle.velocity()[1] == 0.0)
+        );
+        assert!(
+            particles
+                .iter()
+                .any(|particle| particle.velocity()[0].abs() > 1.0)
+        );
+        assert!(
+            particles
+                .iter()
+                .all(|particle| particle.velocity()[0].abs() <= 400.0)
+        );
+        let mut again = Simulation::new(Arc::clone(&simulation.system), 5);
+        again.advance(1.0);
+        assert!(again.particles() == particles);
+    }
 
     #[test]
     fn the_same_system_and_time_give_the_same_particles() {

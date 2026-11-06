@@ -121,6 +121,21 @@ pub struct Spawn {
     pub velocity: Between<[f32; 3]>,
     pub rotation: Between<[f32; 3]>,
     pub spin: Between<[f32; 3]>,
+    /// Speed added along a direction that noise over time turns.
+    pub turbulent: Option<Turbulent>,
+}
+
+/// A particle's start along `forward`, turned by `offset` radians and by noise over when it's
+/// born, up to `scale` half turns either way, at a speed from `speed`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Turbulent {
+    pub forward: [f32; 3],
+    pub offset: f32,
+    pub scale: f32,
+    pub speed: [f32; 2],
+    /// Added to each particle's place in the noise, which runs `timescale` a second.
+    pub phase: [f32; 2],
+    pub timescale: f32,
 }
 
 impl Default for Spawn {
@@ -133,6 +148,7 @@ impl Default for Spawn {
             velocity: Between::fixed([0.0; 3]),
             rotation: Between::fixed([0.0; 3]),
             spin: Between::fixed([0.0; 3]),
+            turbulent: None,
         }
     }
 }
@@ -177,6 +193,17 @@ pub enum Operator {
         /// Shares of a life where it starts and finishes fading in, and out.
         blend: [f32; 4],
     },
+    /// Each particle pushed by noise over its place and time, at a speed of its own from
+    /// `speed` each second, as far along each axis as `mask` says.
+    Turbulence {
+        /// How many noise cells a unit of place crosses, and a second.
+        scale: f32,
+        timescale: f32,
+        speed: [f32; 2],
+        phase: [f32; 2],
+        mask: [f32; 3],
+        blend: [f32; 4],
+    },
 }
 
 /// What an oscillation swings.
@@ -218,6 +245,29 @@ const EMITTER: &[&str] = &[
 ];
 const RANGE: &[&str] = &["exponent", "max", "min"];
 const CHANGE: &[&str] = &["endtime", "endvalue", "starttime", "startvalue"];
+const TURBULENT: &[&str] = &[
+    "forward",
+    "offset",
+    "phasemax",
+    "phasemin",
+    "scale",
+    "speedmax",
+    "speedmin",
+    "timescale",
+];
+const TURBULENCE: &[&str] = &[
+    "blendinend",
+    "blendinstart",
+    "blendoutend",
+    "blendoutstart",
+    "mask",
+    "phasemax",
+    "phasemin",
+    "scale",
+    "speedmax",
+    "speedmin",
+    "timescale",
+];
 
 impl System {
     pub fn parse(json: &str) -> Result<Self, Error> {
@@ -379,6 +429,20 @@ fn emitter(value: &Value) -> Result<Emitter, Error> {
 
 fn initialize(value: &Value, spawn: &mut Spawn) -> Result<(), Error> {
     let kind = text(value.get("name"));
+    if kind == Some("turbulentvelocityrandom") {
+        known(value, TURBULENT, "initializer")?;
+        let field = |key: &str, fill: f32| number(value.get(key)).unwrap_or(fill);
+        let low = field("speedmin", 100.0);
+        spawn.turbulent = Some(Turbulent {
+            forward: vector(value.get("forward"), [0.0, 1.0, 0.0]),
+            offset: field("offset", 0.0),
+            scale: field("scale", 1.0),
+            speed: [low, field("speedmax", 250.0).max(low)],
+            phase: ordered(field("phasemin", 0.0), field("phasemax", 0.1)),
+            timescale: field("timescale", 1.0),
+        });
+        return Ok(());
+    }
     known(value, RANGE, "initializer")?;
     let exponent = number(value.get("exponent")).unwrap_or(1.0);
     if !(0.01..=100.0).contains(&exponent) {
@@ -509,9 +573,30 @@ fn operator(value: &Value) -> Result<Operator, Error> {
                 ],
             }
         }
+        Some("turbulence") => {
+            known(value, TURBULENCE, "operator")?;
+            let low = field("speedmin", 500.0);
+            Operator::Turbulence {
+                scale: field("scale", 0.01),
+                timescale: field("timescale", 1.0),
+                speed: [low, field("speedmax", 1000.0).max(low)],
+                phase: ordered(field("phasemin", 0.0), field("phasemax", 0.1)),
+                mask: vector(value.get("mask"), [1.0, 1.0, 0.0]),
+                blend: [
+                    field("blendinstart", 0.0),
+                    field("blendinend", 0.0),
+                    field("blendoutstart", 1.0),
+                    field("blendoutend", 1.0),
+                ],
+            }
+        }
         other => return Err(refuse(&format!("operator {}", name(other)))),
     };
     Ok(operator)
+}
+
+fn ordered(low: f32, high: f32) -> [f32; 2] {
+    [low.min(high), high.max(low)]
 }
 
 fn list<'a>(root: &'a Value, key: &str) -> Result<&'a [Value], Error> {
@@ -626,8 +711,8 @@ mod tests {
             ),
             (
                 r#""name": "movement""#,
-                r#""name": "turbulence""#,
-                "operator turbulence",
+                r#""name": "vortex""#,
+                "operator vortex",
             ),
             (
                 r#""starttime": 2"#,

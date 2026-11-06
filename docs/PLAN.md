@@ -119,7 +119,14 @@ children are drawn: each is one more system of the same object, let out once and
 its parent, its origin in the parent's units and turned with it, three generations deep at
 most. Children let out per particle (`eventspawn`, `eventfollow`, `eventdeath`) are refused;
 none of the near scenes was held by static children alone, so their placement hasn't been
-checked against Wallpaper Engine yet.
+checked against Wallpaper Engine yet. Turbulence is drawn both ways the documentation gives it: a
+turbulent start (`turbulentvelocityrandom`) turns its forward direction by `offset` radians
+(stock leaves fall with 3) and by noise over when each particle is born, up to `scale` half
+turns; the `turbulence` operator pushes each particle every second by noise over its place
+and the time, at a speed of its own, along the axes its mask lets through. Their defaults
+aren't written anywhere public, so those that no file sets are guesses (speeds 100–250 and
+500–1000, operator scale 0.01, mask "1 1 0" since 3D examples spell out "1 1 1"); audio
+response is refused.
 
 **F. SceneScript**, done for objects: each `{script, scriptproperties, value}` on an image,
 particle system or group's `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or
