@@ -58,10 +58,42 @@ pub struct Layer {
     pub fullscreen: bool,
     /// Its effects' passes, drawn in order over its picture before it's placed in the scene.
     pub effects: Vec<EffectPass>,
+    /// Its effects hidden at first that can't be drawn; scripts that show one fail.
+    pub undrawn: effect::Undrawn,
     /// A particle system drawn with its texture, in place of a picture.
     pub particles: Option<Arc<crate::particles::System>>,
     /// How a text layer's words are drawn, for when its scripts change them.
     pub text: Option<Arc<crate::text::Lettering>>,
+}
+
+/// A layer without its hidden effects that read the pointer, which are left as ones that
+/// can't be drawn.
+fn unpointed(layer: Layer) -> Layer {
+    let pointing: std::collections::BTreeSet<usize> = layer
+        .effects
+        .iter()
+        .filter(|pass| {
+            !pass.visible && (pass.fragment.reads.pointer || pass.fragment.reads.parallax)
+        })
+        .map(|pass| pass.effect)
+        .collect();
+    if pointing.is_empty() {
+        return layer;
+    }
+    let why = format!("needs {}", Missing::PointerParallax);
+    Layer {
+        effects: layer
+            .effects
+            .into_iter()
+            .filter(|pass| !pointing.contains(&pass.effect))
+            .collect(),
+        undrawn: layer
+            .undrawn
+            .into_iter()
+            .chain(pointing.iter().map(|&effect| (effect, why.clone())))
+            .collect(),
+        ..layer
+    }
 }
 
 /// A texture bound to an explicit secondary sampler slot.
@@ -229,7 +261,7 @@ impl Project {
 
     fn prepare_inner(&self, allow_parallax: bool) -> Result<Prepared, Error> {
         let root = self.json(&self.scene)?;
-        let scene = Scene::from_value(&root)?;
+        let mut scene = Scene::from_value(&root)?;
         let mut missing = scene.missing();
         if !allow_parallax && scene.parallax.is_some() {
             missing.push(Missing::PointerParallax);
@@ -242,6 +274,12 @@ impl Project {
         if !skipped.is_empty() {
             return Err(Error::Format(skipped.join("; ")));
         }
+        // Hidden effects that read the pointer can't be shown on a host that doesn't give it.
+        let layers: Vec<Layer> = if allow_parallax {
+            layers
+        } else {
+            layers.into_iter().map(unpointed).collect()
+        };
         let pointed = layers.iter().any(|layer| {
             layer
                 .fragment
@@ -251,6 +289,11 @@ impl Project {
         });
         if !allow_parallax && pointed {
             return Err(Error::Format(format!("needs {}", Missing::PointerParallax)));
+        }
+        for layer in &layers {
+            for (effect, why) in &layer.undrawn {
+                scene.undrawn(layer.object, *effect, why);
+            }
         }
         // Scripts that fail refuse the scene here, before a host replaces its wallpaper.
         self.stage(&scene)?;
@@ -372,7 +415,7 @@ impl Project {
             .as_ref()
             .map_err(|reason| Error::Format(reason.clone()))?
             .clone();
-        let effects = self.effects(image, textures, remaining, still)?;
+        let (effects, undrawn) = self.effects(image, textures, remaining, still)?;
         let image = image.clone();
         // A plain colour is as big as the layer says, which effects drawn over it need.
         let texture = match (resolved.solid, image.size) {
@@ -391,6 +434,7 @@ impl Project {
             blending: resolved.blending,
             fullscreen: resolved.fullscreen,
             effects,
+            undrawn,
             particles: None,
             text: None,
         })

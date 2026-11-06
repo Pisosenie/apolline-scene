@@ -31,7 +31,7 @@ impl Project {
             .flatten()
             .into_iter()
             .collect();
-        let effects = self.effects(&words.layer, resources, remaining, still)?;
+        let (effects, undrawn) = self.effects(&words.layer, resources, remaining, still)?;
         let lettering = Lettering::new(font, others, words, !effects.is_empty());
         let raster = lettering.raster(&words.text);
         let bytes: usize = raster.texture.images[0]
@@ -55,6 +55,7 @@ impl Project {
             blending: Blending::Translucent,
             fullscreen: false,
             effects,
+            undrawn,
             particles: None,
             text: Some(Arc::new(lettering)),
         })

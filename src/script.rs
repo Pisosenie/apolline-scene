@@ -1,6 +1,7 @@
 //! SceneScript: the JavaScript modules a scene puts on its objects' values, run in QuickJS.
 //! Each frame every script's `update` gets its value and returns the new one, and scripts may
-//! move any layer through `thisScene`. What they can reach is what Wallpaper Engine documents
+//! move any layer through `thisScene` and show or hide its effects. Scripts on an effect's
+//! values change what its shaders are given. What they can reach is what Wallpaper Engine documents
 //! for a wallpaper: the engine's clock, time of day, audio, vectors and the scene's layers.
 //! Cursor and media events never come, as on a desktop nobody is pointing at; a script that
 //! asks for anything else fails and is named, so the scene can be refused.
@@ -13,7 +14,7 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{Context, Ctx, Function, Module, Object, Runtime, Value};
 
 use crate::Error;
-use crate::scene::{Local, Node, Object as SceneObject, Pose, Scene, pose};
+use crate::scene::{Local, Node, Object as SceneObject, Pose, Scene, Target, pose};
 
 const WORLD: &str = include_str!("script/world.js");
 const MODULES: [(&str, &str); 3] = [
@@ -47,6 +48,11 @@ pub struct Stage {
     /// Whether the scene has text layers, and which of them have new words.
     lettered: bool,
     written: Vec<(usize, String)>,
+    /// Whether each of the scene's effects is shown, as `Scene::effects` numbers them, and
+    /// the values scripts on effects give their shaders, in script order.
+    shown: Vec<bool>,
+    values: Vec<[f32; 4]>,
+    valued: bool,
 }
 
 /// What a frame of the scene's scripts sees.
@@ -113,9 +119,26 @@ impl Stage {
                 .iter()
                 .any(|object| matches!(object, SceneObject::Text(_))),
             written: Vec::new(),
+            shown: scene
+                .effects()
+                .iter()
+                .map(|(_, effect)| effect.visible)
+                .collect(),
+            values: Vec::new(),
+            valued: scene
+                .scripts
+                .iter()
+                .any(|script| matches!(script.target, Target::Value { .. })),
         };
         stage.allow(LOADING_MS);
-        let failures = stage.load(scene, user)?;
+        // Cut short while loading, QuickJS says nothing useful about why.
+        let failures = stage.load(scene, user).map_err(|error| {
+            if stage.overdue() {
+                Error::Format("SceneScript: the scripts ran too long".into())
+            } else {
+                error
+            }
+        })?;
         if !failures.is_empty() {
             return Err(Error::Format(failures.join("; ")));
         }
@@ -156,10 +179,21 @@ impl Stage {
         &self.poses
     }
 
+    /// Whether each of the scene's effects is shown now, as `Scene::effects` numbers them, and
+    /// the values scripts give effects' shaders now: one for each script on one, in the order
+    /// the scene's scripts are in.
+    pub(crate) fn effects(&self) -> (&[bool], &[[f32; 4]]) {
+        (&self.shown, &self.values)
+    }
+
     /// Text layers whose words the scripts changed since this was last asked, each once with
     /// its latest words.
     pub fn written(&mut self) -> Vec<(usize, String)> {
         std::mem::take(&mut self.written)
+    }
+
+    fn overdue(&self) -> bool {
+        self.started.elapsed().as_millis() as u64 > self.deadline.load(Ordering::Relaxed)
     }
 
     fn allow(&self, milliseconds: u64) {
@@ -195,10 +229,31 @@ impl Stage {
                 _ => None,
             })
             .collect();
+        let effects = scene.effects();
+        let slots: std::collections::HashMap<(usize, usize), usize> = effects
+            .iter()
+            .enumerate()
+            .map(|(slot, (object, effect))| ((*object, effect.index), slot))
+            .collect();
+        let layered: Vec<serde_json::Value> = effects
+            .iter()
+            .map(|(object, effect)| {
+                let name = crate::value::text(effect.value.get("name")).unwrap_or_default();
+                serde_json::json!([object, effect.index, name, effect.visible, effect.undrawn])
+            })
+            .collect();
+        let scripted: Vec<serde_json::Value> = scene
+            .scripts
+            .iter()
+            .filter(|script| matches!(script.target, Target::Value { .. }))
+            .map(|script| first_value(&effects, &slots, script))
+            .collect();
         let setup = serde_json::json!({
             "objects": objects,
             "initial": initial,
             "words": words,
+            "layered": layered,
+            "scripted": scripted,
             "width": scene.size.0,
             "height": scene.size.1,
             "user": user,
@@ -217,13 +272,38 @@ impl Stage {
             let add: Function = world.get("add").map_err(fail)?;
             let asking: Function = world.get("asking").map_err(fail)?;
             let mut failures = Vec::new();
+            let mut value = -1i64;
             for (at, script) in scene.scripts.iter().enumerate() {
                 asking.call::<_, String>(()).map_err(fail)?;
                 let properties = serde_json::Value::Object(script.properties.clone());
+                let slot = |place: usize| {
+                    slots
+                        .get(&(script.object, place))
+                        .map_or(-1, |&slot| slot as i64)
+                };
+                let (property, shown, effect) = match &script.target {
+                    Target::Object(property) => (*property, -1, -1),
+                    Target::Shown(place) => ("", slot(*place), slot(*place)),
+                    Target::Value { effect, .. } => {
+                        value += 1;
+                        ("", -1, slot(*effect))
+                    }
+                };
+                let valued = if matches!(script.target, Target::Value { .. }) {
+                    value
+                } else {
+                    -1
+                };
+                // An effect's scripts see the effect as `thisObject`, the rest their layer.
+                let this = if effect >= 0 {
+                    format!("__world.effect({effect})")
+                } else {
+                    "thisLayer".to_owned()
+                };
                 // The script's own names come first, on its first line, so its lines keep
                 // their numbers.
                 let source = format!(
-                    "const thisLayer = __world.layer({object}), thisObject = thisLayer, \
+                    "const thisLayer = __world.layer({object}), thisObject = {this}, \
                      createScriptProperties = () => __world.properties({properties});{source}",
                     object = script.object,
                     source = script.source,
@@ -235,7 +315,14 @@ impl Stage {
                         module.namespace()
                     })
                     .and_then(|exports| {
-                        add.call::<_, ()>((script.object, script.property, exports))
+                        add.call::<_, ()>((
+                            script.object,
+                            script.label(),
+                            property,
+                            shown,
+                            valued,
+                            exports,
+                        ))
                     });
                 if let Err(error) = loaded {
                     let mut message = caught(&ctx, error);
@@ -246,7 +333,7 @@ impl Stage {
                     failures.push(failure(
                         names,
                         script.object as i64,
-                        script.property,
+                        &script.label(),
                         &message,
                     ));
                 }
@@ -261,7 +348,7 @@ impl Stage {
         let spectrum: Option<Vec<f32>> = moment.spectrum.map(|bins| bins.concat());
         self.allow(FRAME_MS);
         let names = &self.names;
-        let (values, written, failures, stopped) = self.context.with(|ctx| {
+        let (values, effected, written, failures, stopped) = self.context.with(|ctx| {
             let fail = |error| Error::Format(format!("SceneScript: {}", caught(&ctx, error)));
             let world = world(&ctx).map_err(fail)?;
             let tick: Function = world.get("tick").map_err(fail)?;
@@ -288,6 +375,14 @@ impl Stage {
                     None
                 }
             };
+            let mut effected = None;
+            if (!self.shown.is_empty() || self.valued) && values.is_some() {
+                self.allow(FRAME_MS);
+                effected = world
+                    .get::<_, Function>("effects")
+                    .and_then(|effects| effects.call::<_, Vec<f64>>(()))
+                    .ok();
+            }
             let mut written = Vec::new();
             if self.lettered && values.is_some() {
                 self.allow(FRAME_MS);
@@ -316,9 +411,21 @@ impl Stage {
                     })
                     .collect();
             }
-            Ok::<_, Error>((values, written, failures, stopped))
+            Ok::<_, Error>((values, effected, written, failures, stopped))
         })?;
         self.stopped |= stopped;
+        if let Some(effected) = effected {
+            let (shown, values) = effected.split_at(self.shown.len().min(effected.len()));
+            for (now, &on) in self.shown.iter_mut().zip(shown) {
+                *now = on != 0.0;
+            }
+            self.values = values
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|value| value.map(|number| number as f32))
+                .collect();
+        }
         for changed in written {
             if let [object, words] = changed.as_slice()
                 && let Ok(object) = object.parse::<usize>()
@@ -344,6 +451,60 @@ impl Stage {
             }
         }
         Ok(failures)
+    }
+}
+
+/// The value a script on an effect's value starts from, as the scene gives it: how many
+/// numbers it is, 0 for a flag, and the numbers.
+fn first_value(
+    effects: &[(usize, &crate::scene::Effect)],
+    slots: &std::collections::HashMap<(usize, usize), usize>,
+    script: &crate::scene::Script,
+) -> serde_json::Value {
+    use serde_json::Value as Json;
+    let Target::Value { effect, pass, name } = &script.target else {
+        return Json::Null;
+    };
+    let given = slots
+        .get(&(script.object, *effect))
+        .and_then(|&slot| {
+            effects[slot]
+                .1
+                .value
+                .get("passes")?
+                .get(*pass)?
+                .get("constantshadervalues")?
+                .get(name)
+        })
+        .map(crate::value::plain);
+    let numbers = |parts: Vec<f64>| {
+        let count = parts.len().clamp(1, 4);
+        let mut out = [0.0; 4];
+        for (slot, part) in out.iter_mut().zip(parts) {
+            *slot = if part.is_finite() { part } else { 0.0 };
+        }
+        serde_json::json!([count, out[0], out[1], out[2], out[3]])
+    };
+    match given {
+        Some(Json::Bool(on)) => serde_json::json!([0, f64::from(u8::from(*on)), 0, 0, 0]),
+        Some(Json::String(text)) if matches!(text.trim(), "true" | "false") => {
+            serde_json::json!([0, if text.trim() == "true" { 1 } else { 0 }, 0, 0, 0])
+        }
+        Some(Json::String(text)) => numbers(
+            text.split_whitespace()
+                .take(4)
+                .map(|word| word.parse().unwrap_or(0.0))
+                .collect(),
+        ),
+        Some(Json::Array(items)) => numbers(
+            items
+                .iter()
+                .take(4)
+                .map(|item| item.as_f64().unwrap_or(0.0))
+                .collect(),
+        ),
+        Some(Json::Number(number)) => numbers(vec![number.as_f64().unwrap_or(0.0)]),
+        _ => numbers(Vec::new()),
     }
 }
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use glow::HasContext;
 
-use super::chain::Chain;
+use super::chain::{Chain, Pass};
 use super::{Base, Drawn, Input, Program, Renderer, Step, Values, material, reserve, upload};
 use crate::Error;
 use crate::project::Layer;
@@ -199,6 +199,7 @@ impl<'a> Builder<'a> {
         size: (u32, u32),
     ) -> Result<(Step, Option<Chain>), Error> {
         let mut steps = vec![own];
+        let mut passes = Vec::with_capacity(layer.effects.len());
         for pass in &layer.effects {
             let mut bindings = 1u8;
             let mut inputs = Vec::with_capacity(pass.inputs.len());
@@ -218,6 +219,12 @@ impl<'a> Builder<'a> {
                 uv_max: [1.0; 2],
                 constants,
             });
+            passes.push(Pass {
+                effect: pass.effect,
+                pass: pass.pass,
+                visible: pass.visible,
+                keys: pass.fragment.keys.clone(),
+            });
         }
         let animated = steps.iter().any(|step| {
             renderer.programs[step.program]
@@ -229,7 +236,7 @@ impl<'a> Builder<'a> {
             &mut self.allocated,
             2 * 4 * size.0 as usize * size.1 as usize,
         )?;
-        let chain = unsafe { Chain::new(self.gl, size, steps, animated)? };
+        let chain = unsafe { Chain::new(self.gl, size, steps, passes, animated)? };
         let (width, height) = (size.0 as f32, size.1 as f32);
         let place = Step {
             program: 0,

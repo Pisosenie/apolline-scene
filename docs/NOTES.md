@@ -100,8 +100,8 @@ and scalar/vector material constants from annotations or constantshadervalues. B
 properties are resolved before constants become GLSL literals. UV input is v_TexCoord as vec2,
 vec3 or vec4; g_Texture0 through g_Texture7 and their Resolution uniforms are provided.
 Unknown constants, unsupported dynamic uniforms, uniform arrays, unsupported texture metadata and unsupported pass
-fields refuse preparation rather than receive invented values. Image effect arrays and
-multi-pass materials are still unsupported.
+fields refuse preparation rather than receive invented values. Multi-pass materials are
+still unsupported.
 
 A bounded conditional pass selects #if/#ifdef/#ifndef/#else/#elif/#endif branches before
 uniform introspection. Inactive dynamic uniforms, alternate UV declarations and unused

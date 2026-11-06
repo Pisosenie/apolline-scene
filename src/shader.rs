@@ -27,6 +27,9 @@ pub struct Fragment {
     /// Material values, set as uniforms for each layer; layers that differ only in these
     /// share a program.
     pub(crate) constants: Vec<(String, Constant)>,
+    /// The material value each constant was given from, by the material's name for it; none
+    /// for a shader's default.
+    pub(crate) keys: Vec<Option<String>>,
     /// The material's own vertex shader, when it has one.
     pub(crate) vertex: Option<String>,
     /// What it reads from the engine beyond time.
@@ -219,16 +222,25 @@ impl Template {
                     }
                 }
                 // Each stage of a stock shader has values of its own, even under one name;
-                // where they differ, the vertex stage's gets a name of its own.
-                for (name, value) in std::mem::take(&mut stage.constants) {
-                    match bound.constants.iter().find(|(known, _)| *known == name) {
-                        Some((_, known)) if *known != value => {
+                // where they differ, in value or in the material value that feeds them, the
+                // vertex stage's gets a name of its own.
+                let keys = std::mem::take(&mut stage.keys);
+                for ((name, value), key) in
+                    std::mem::take(&mut stage.constants).into_iter().zip(keys)
+                {
+                    let fragment = bound.constants.iter().position(|(known, _)| *known == name);
+                    match fragment.map(|at| (&bound.constants[at].1, &bound.keys[at])) {
+                        Some((known, known_key)) if *known != value || *known_key != key => {
                             let own = format!("apolline_vertex_{name}");
                             stage.body = rename(&stage.body, &name, &own)?;
                             bound.constants.push((own, value));
+                            bound.keys.push(key);
                         }
                         Some(_) => {}
-                        None => bound.constants.push((name, value)),
+                        None => {
+                            bound.constants.push((name, value));
+                            bound.keys.push(key);
+                        }
                     }
                 }
                 bound.used.extend(stage.used);
@@ -261,6 +273,7 @@ impl Template {
             inputs: bound.inputs,
             animated: bound.animated,
             constants: bound.constants,
+            keys: bound.keys,
             bindings,
             files,
         })

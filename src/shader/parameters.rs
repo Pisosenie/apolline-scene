@@ -23,6 +23,35 @@ impl Constant {
             Constant::Bool(value) => [f32::from(u8::from(*value)), 0.0, 0.0, 0.0],
         }
     }
+
+    /// The same kind of value with new numbers, as many as it takes; numbers that aren't
+    /// finite keep the old ones.
+    pub fn with(&self, numbers: [f32; 4]) -> Constant {
+        let old = self.floats();
+        let numbers: [f32; 4] = std::array::from_fn(|at| {
+            if numbers[at].is_finite() {
+                numbers[at]
+            } else {
+                old[at]
+            }
+        });
+        match self {
+            Constant::Float { count, .. } => Constant::Float {
+                bits: std::array::from_fn(|at| {
+                    if at < usize::from(*count) {
+                        numbers[at].to_bits()
+                    } else {
+                        0
+                    }
+                }),
+                count: *count,
+            },
+            Constant::Int(_) => {
+                Constant::Int(numbers[0].round().clamp(i32::MIN as f32, i32::MAX as f32) as i32)
+            }
+            Constant::Bool(_) => Constant::Bool(numbers[0] != 0.0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,6 +86,8 @@ pub(super) struct Bound {
     pub inputs: u8,
     pub animated: bool,
     pub constants: Vec<(String, Constant)>,
+    /// The material value each constant was given from, by the material's name for it.
+    pub keys: Vec<Option<String>>,
     /// Material values this stage read, by the name the material gives them.
     pub used: HashSet<String>,
     /// Name and type of each varying, in order.
@@ -87,6 +118,7 @@ pub(super) fn bind(
     let mut inputs = 0u8;
     let mut animated = false;
     let mut bound = Vec::new();
+    let mut keys = Vec::new();
     let mut varyings = Vec::new();
     let mut reads = Reads::default();
     let mut index = 0;
@@ -270,6 +302,7 @@ pub(super) fn bind(
         let constant =
             constant(kind, raw).map_err(|error| fail(format!("uniform {name}: {error}")))?;
         bound.push((name.to_owned(), constant));
+        keys.push(supplied.is_some().then(|| key.to_owned()));
     }
     let mut output = String::new();
     let mut from = 0;
@@ -288,6 +321,7 @@ pub(super) fn bind(
         inputs,
         animated,
         constants: bound,
+        keys,
         used,
         varyings,
         reads,
@@ -424,5 +458,27 @@ fn spectrum(name: &str) -> Option<usize> {
         "32" => Some(32),
         "64" => Some(64),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Constant;
+
+    #[test]
+    fn new_numbers_keep_a_constants_kind() {
+        let colour = Constant::Float {
+            bits: [1.0f32, 2.0, 3.0, 0.0].map(f32::to_bits),
+            count: 3,
+        };
+        assert_eq!(
+            colour.with([4.0, f32::NAN, 6.0, 7.0]).floats(),
+            [4.0, 2.0, 6.0, 0.0]
+        );
+        assert_eq!(
+            Constant::Int(1).with([2.6, 0.0, 0.0, 0.0]),
+            Constant::Int(3)
+        );
+        assert_eq!(Constant::Bool(true).with([0.0; 4]), Constant::Bool(false));
     }
 }

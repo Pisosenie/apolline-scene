@@ -1,7 +1,8 @@
 //! Effects on a layer. Each instance names an `effect.json`, whose passes name materials, and
 //! its own passes override their combos, values and textures. Every pass draws over the
-//! layer's picture so far, which it reads in texture slot 0. What isn't understood — render
-//! targets, passes that blend, values that change — is refused by name.
+//! layer's picture so far, which it reads in texture slot 0. Scripts may show and hide effects
+//! and change their values as the scene runs. What isn't understood — render targets, passes
+//! that blend, animated values — is refused by name.
 
 use super::material::{Resources, names, object};
 use super::*;
@@ -13,7 +14,19 @@ pub struct EffectPass {
     pub fragment: Arc<Fragment>,
     /// Textures in slots 1 to 7.
     pub inputs: Vec<TextureInput>,
+    /// The effect's place in the layer's list and the pass's in the effect, which scripts
+    /// find it by.
+    pub effect: usize,
+    pub pass: usize,
+    /// Whether its effect is shown at first.
+    pub visible: bool,
 }
+
+/// The most passes a layer's effects may have.
+const MOST_PASSES: usize = 32;
+
+/// Effects hidden at first that can't be drawn, by place in the layer's list, and why.
+pub type Undrawn = Vec<(usize, String)>;
 
 const INSTANCE: &[&str] = &["file", "id", "name", "passes", "username", "visible"];
 const DEFINITION: &[&str] = &[
@@ -43,26 +56,79 @@ const PASS: &[&str] = &[
 ];
 
 impl Project {
-    /// The passes of an image's shown effects, in drawing order.
+    /// The passes of an image's effects, in drawing order. Shown effects are prepared first,
+    /// so hidden ones only get what they leave of the budget and the passes a layer may have;
+    /// a hidden effect that can't be drawn is left out and named in the second list with why,
+    /// for scripts that would show it to fail.
     pub(super) fn effects(
         &self,
         image: &Image,
         resources: &mut Resources,
         remaining: &mut usize,
         still: bool,
-    ) -> Result<Vec<EffectPass>, Error> {
-        let mut passes = Vec::new();
-        for instance in &image.effects {
-            let file = text(instance.get("file")).unwrap_or_default();
-            self.effect(instance, file, resources, remaining, still, &mut passes)
-                .map_err(|error| Error::Format(format!("effect {}: {error}", name(file))))?;
-            if passes.len() > 32 {
+    ) -> Result<(Vec<EffectPass>, Undrawn), Error> {
+        let mut made: Vec<Vec<EffectPass>> = Vec::new();
+        let mut undrawn = Vec::new();
+        let mut count = 0;
+        let (shown, hidden): (Vec<_>, Vec<_>) =
+            image.effects.iter().partition(|effect| effect.visible);
+        for effect in shown {
+            let passes = self.passes(effect, resources, remaining, still)?;
+            count += passes.len();
+            if count > MOST_PASSES {
                 return Err(Error::Format(
                     "a layer with more than 32 effect passes".into(),
                 ));
             }
+            made.push(passes);
         }
-        Ok(passes)
+        for effect in hidden {
+            match self.passes(effect, resources, remaining, still) {
+                Ok(passes) if count + passes.len() <= MOST_PASSES => {
+                    count += passes.len();
+                    made.push(passes);
+                }
+                Ok(_) => undrawn.push((
+                    effect.index,
+                    "a layer with more than 32 effect passes".into(),
+                )),
+                Err(error) => undrawn.push((effect.index, error.to_string())),
+            }
+        }
+        let mut passes: Vec<EffectPass> = made.into_iter().flatten().collect();
+        passes.sort_by_key(|pass| (pass.effect, pass.pass));
+        Ok((passes, undrawn))
+    }
+
+    /// One effect's passes, each knowing which it is.
+    fn passes(
+        &self,
+        effect: &crate::scene::Effect,
+        resources: &mut Resources,
+        remaining: &mut usize,
+        still: bool,
+    ) -> Result<Vec<EffectPass>, Error> {
+        let file = text(effect.value.get("file")).unwrap_or_default();
+        let mut passes = Vec::new();
+        self.effect(
+            &effect.value,
+            file,
+            resources,
+            remaining,
+            still,
+            &mut passes,
+        )
+        .map_err(|error| Error::Format(format!("effect {}: {error}", name(file))))?;
+        Ok(passes
+            .into_iter()
+            .enumerate()
+            .map(|(at, pass)| EffectPass {
+                effect: effect.index,
+                pass: at,
+                visible: effect.visible,
+                ..pass
+            })
+            .collect())
     }
 
     fn effect(
@@ -178,7 +244,11 @@ impl Project {
         if combos.len() > 64 || constants.len() > 128 {
             return Err(Error::Format("too many effect combos or values".into()));
         }
-        if combos.values().chain(constants.values()).any(changing) {
+        if combos.values().any(|value| changing(value, &[]))
+            || constants
+                .values()
+                .any(|value| changing(value, &["script", "scriptproperties"]))
+        {
             return Err(Error::Format(
                 "animated effect values need another renderer".into(),
             ));
@@ -193,7 +263,13 @@ impl Project {
                 });
             }
         }
-        Ok(EffectPass { fragment, inputs })
+        Ok(EffectPass {
+            fragment,
+            inputs,
+            effect: 0,
+            pass: 0,
+            visible: true,
+        })
     }
 }
 
@@ -211,11 +287,14 @@ fn known(value: &Value, keys: &[&str]) -> Result<(), Error> {
     }
 }
 
-/// A value with more in it than a property binding: an animation or a script.
-fn changing(value: &Value) -> bool {
-    value
-        .as_object()
-        .is_some_and(|fields| fields.keys().any(|key| key != "value" && key != "user"))
+/// A value with more in it than a property binding and the `run` keys: an animation, or a
+/// script where none runs.
+fn changing(value: &Value, run: &[&str]) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields
+            .keys()
+            .any(|key| !["value", "user"].contains(&key.as_str()) && !run.contains(&key.as_str()))
+    })
 }
 
 /// `effects/waterripple/effect.json` → `waterripple`.

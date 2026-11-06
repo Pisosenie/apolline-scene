@@ -14,6 +14,7 @@ parser.add_argument("--mask-format", choices=("r", "rg", "rgba"), default="r", h
 demos.add_argument("--wave-demo", action="store_true", help="apply a synthetic native animated wave material")
 demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and sun through pass-through materials with their own vertex shaders")
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
+demos.add_argument("--effect-script-demo", action="store_true", help="the effect demo with a black tint and inversions in the wrong places, which scripts put right")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -21,6 +22,7 @@ demos.add_argument("--text-demo", action="store_true", help="write a title, a wr
 demos.add_argument("--inputs-demo", action="store_true", help="read the pointer, parallax, daytime and audio at their resting values, which leave the sky as it is")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
+args.effect_demo |= args.effect_script_demo
 if args.without_mask and not args.mask_demo:
     parser.error("--without-mask requires --mask-demo")
 out = args.folder
@@ -185,6 +187,28 @@ void main() {
     gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(u_Color, 1.0) * texSample2D(g_Texture1, v_TexCoord);
 }
 '''
+if args.effect_script_demo:
+    # The tint is stored black and its script makes it white again; it also hides the sun's
+    # last inversion. Of the sun's others, a hidden one is shown by its own script and a shown
+    # one hides itself, so two of four draw: an odd chain turned even.
+    scene = json.loads(files["scene.json"])
+    whiten = """let first;
+export function init(value) { first = value; }
+export function update() {
+    thisScene.getLayer('sun').getEffect(3).visible = false;
+    return first.add(0.5).multiply(2);
+}"""
+    show = "export function update() { return true; }"
+    hide = "export function update() { thisObject.visible = false; }"
+    scene["objects"][0]["effects"][0]["passes"][0]["constantshadervalues"]["color"] = {"script": whiten, "value": "0 0 0"}
+    invert = {"file": "effects/invert/effect.json"}
+    scene["objects"][1]["effects"] = [
+        dict(invert, visible={"script": show, "value": False}),
+        dict(invert, passes=[{"combos": {"STAGED": 1}}]),
+        dict(invert, visible={"script": hide, "value": True}),
+        invert,
+    ]
+    files["scene.json"] = json.dumps(scene).encode()
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'

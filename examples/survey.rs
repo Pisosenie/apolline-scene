@@ -377,6 +377,22 @@ impl Survey {
                 alone.get(reason).copied().unwrap_or(0)
             );
         }
+        out += "\n## Scenes a few steps away\n\nScenes that only up to three reasons keep from \
+                drawing, by what those reasons are.\n\n";
+        let mut near: BTreeMap<String, usize> = BTreeMap::new();
+        for reasons in self.blocked.iter().filter(|reasons| reasons.len() <= 3) {
+            let set: Vec<&str> = reasons.iter().map(String::as_str).collect();
+            *near.entry(set.join(" + ")).or_default() += 1;
+        }
+        let mut near: Vec<(String, usize)> = near.into_iter().collect();
+        near.sort_by(|a, b| {
+            let steps = |set: &str| set.matches(" + ").count();
+            steps(&a.0).cmp(&steps(&b.0)).then(b.1.cmp(&a.1))
+        });
+        out += "| reasons | scenes |\n|---|---|\n";
+        for (set, count) in near {
+            out += &format!("| {set} | {count} |\n");
+        }
         out += "\n## Layers left out\n\nWhy single layers can't be drawn, in layers and in scenes.\n\n";
         out += "| reason | layers | scenes |\n|---|---|---|\n";
         let mut layers: Vec<(&String, &(usize, usize))> = self.layers.iter().collect();

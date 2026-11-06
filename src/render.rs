@@ -7,6 +7,7 @@ mod chain;
 mod compile;
 mod geometry;
 mod material;
+mod scripted;
 mod state;
 mod swarm;
 mod target;
@@ -186,6 +187,8 @@ pub struct Renderer {
     eye: [f32; 2],
     inputs: Box<material::Inputs>,
     stage: Option<Box<Stage>>,
+    /// Where the scripts' say over effects lands.
+    wiring: scripted::Wiring,
     /// The size of the last target drawn to, which scripts see as the screen.
     screen: std::cell::Cell<(u32, u32)>,
 }
@@ -217,6 +220,7 @@ impl Renderer {
             eye: [0.0; 2],
             inputs: Box::default(),
             stage: None,
+            wiring: scripted::Wiring::default(),
             screen: std::cell::Cell::new((scene.size.0 as u32, scene.size.1 as u32)),
         };
         let mut builder = build::Builder::new(gl);
@@ -238,6 +242,7 @@ impl Renderer {
             return Err(error);
         }
         renderer.texture_bytes = builder.allocated;
+        renderer.wiring = scripted::Wiring::new(scene, &renderer.layers);
         Ok(renderer)
     }
 
@@ -257,8 +262,8 @@ impl Renderer {
     }
 
     /// Runs a frame of the scene's scripts, at the host's scene time, and moves, shows and
-    /// hides layers and changes their words the way they say. Hosts call it before each
-    /// `draw_timed`.
+    /// hides layers and their effects, gives effects new values and changes words the way
+    /// they say. Hosts call it before each `draw_timed`.
     ///
     /// # Safety
     /// `gl` has to be current on this thread, the one the renderer was made on.
@@ -278,6 +283,8 @@ impl Renderer {
                 layer.pose(pose);
             }
         }
+        let (shown, values) = stage.effects();
+        self.wiring.apply(&mut self.layers, shown, values);
         for (object, text) in stage.written() {
             for layer in self
                 .layers

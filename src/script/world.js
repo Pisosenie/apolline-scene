@@ -105,6 +105,13 @@ let sizes = [];
 // Text layers' words, null for other objects, and the text layers whose words changed.
 let texts = [];
 const written = new Set();
+// Layers' effects as [object, place in its list, name, why it can't be drawn or null], whether
+// each is shown, and the values
+// scripts are on, each as { count, numbers }: a count of 0 is a flag.
+let effectList = [];
+let shown = new Uint8Array(0);
+const effects = [];
+const values = [];
 const layers = [];
 const scripts = [];
 let timers = [];
@@ -156,10 +163,61 @@ class Layer {
     }
     get size() { return new Vec2(sizes[2 * this.index], sizes[2 * this.index + 1]); }
     getParent() { return parents[this.index] < 0 ? null : layers[parents[this.index]]; }
+    getEffect(which) {
+        const found = effectList.findIndex(([object, place, name]) => object === this.index
+            && (typeof which === 'string' ? name === which : place === which));
+        return found < 0 ? null : effects[found];
+    }
+    getEffectCount() { return effectList.filter(([object]) => object === this.index).length; }
+}
+
+class Effect {
+    // Read-only, so scripts can't point one effect at another.
+    constructor(slot) { Object.defineProperty(this, 'slot', { value: slot }); }
+    get name() { return effectList[this.slot][2]; }
+    get visible() { return shown[this.slot] !== 0; }
+    set visible(value) {
+        const why = effectList[this.slot][3];
+        if (value && why !== null) {
+            throw new Error(`it shows an effect that can't be drawn: ${why}`);
+        }
+        shown[this.slot] = value ? 1 : 0;
+    }
+}
+
+// A value as numbers, `count` of them; what can't be read keeps what was there.
+function numbers(value, count, before) {
+    let parts;
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        parts = [Number(value)];
+    } else if (typeof value === 'string') {
+        parts = value.trim().split(/\s+/).map(Number);
+    } else if (Array.isArray(value)) {
+        parts = value;
+    } else if (value !== null && typeof value === 'object') {
+        parts = ['x', 'y', 'z', 'w'].map((key) => value[key]);
+    } else {
+        return before;
+    }
+    return before.map((old, at) => (at < Math.max(count, 1) ? finite(parts[at], old) : old));
+}
+const vectors = [null, null, Vec2, Vec3, Vec4];
+function valueOf(slot) {
+    const { count, numbers: held } = values[slot];
+    if (count === 0) {
+        return held[0] !== 0;
+    }
+    return count === 1 ? held[0] : new vectors[count](...held.slice(0, count));
 }
 
 const slots = { origin: ORIGIN, scale: SCALE, angles: ANGLES, color: COLOR, alpha: ALPHA, brightness: BRIGHTNESS, visible: VISIBLE };
 function read(script) {
+    if (script.shown >= 0) {
+        return effects[script.shown].visible;
+    }
+    if (script.value >= 0) {
+        return valueOf(script.value);
+    }
     if (script.property === 'text') {
         return texts[script.object];
     }
@@ -170,8 +228,14 @@ function read(script) {
     return at === ALPHA || at === BRIGHTNESS ? state[script.object * STRIDE + at] : vector3(script.object, at);
 }
 function write(script, value) {
-    const layer = layers[script.object];
-    layer[script.property] = value;
+    if (script.shown >= 0) {
+        effects[script.shown].visible = value;
+    } else if (script.value >= 0) {
+        const held = values[script.value];
+        held.numbers = numbers(value, held.count, held.numbers);
+    } else {
+        layers[script.object][script.property] = value;
+    }
 }
 
 function spectrumInto(buffer, spectrum) {
@@ -278,9 +342,16 @@ function property(kind, value) {
 // Scripts can't replace what the host calls.
 Object.defineProperty(globalThis, '__world', { writable: false, configurable: false, value: Object.freeze({
     // Objects as [name, parent index or -1, width, height], their state, flattened, and
-    // their words.
-    setup({ objects, initial, words, width, height, user }) {
+    // their words; effects as [object, place, name, shown, why it can't be drawn or null],
+    // and the first values of those scripts are on, as [count, four numbers].
+    setup({ objects, initial, words, width, height, user, layered, scripted }) {
         texts = words;
+        effectList = layered.map(([object, place, name, , why]) => [object, place, name, why ?? null]);
+        shown = Uint8Array.from(layered.map((effect) => (effect[3] ? 1 : 0)));
+        layered.forEach((_, slot) => effects.push(watched(new Effect(slot), 'effect')));
+        for (const [count, ...first] of scripted) {
+            values.push({ count, numbers: first.map((number) => finite(number, 0)) });
+        }
         names = objects.map((object) => object[0]);
         parents = objects.map((object) => object[1]);
         sizes = objects.flatMap((object) => [object[2], object[3]]);
@@ -290,6 +361,7 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
         engine.userProperties = user;
     },
     layer: (index) => layers[index],
+    effect: (slot) => effects[slot],
     // The builder `createScriptProperties()` returns, with the scene's own values over the
     // script's defaults.
     properties(overrides) {
@@ -313,8 +385,10 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
         });
         return builder;
     },
-    add(object, property, exports) {
-        scripts.push({ object, property, init: exports.init, update: exports.update, started: false, error: null });
+    // A script on an object's value, on whether effect `shown` is, or on value `value`;
+    // the others are -1. `label` names it in a failure.
+    add(object, label, property, shown, value, exports) {
+        scripts.push({ object, label, property, shown, value, init: exports.init, update: exports.update, started: false, error: null });
     },
     tick(runtime, frametime, daytime, width, height, spectrum) {
         engine.runtime = runtime;
@@ -363,6 +437,8 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
         }
         return Array.from(state).concat([buffers.length > 0 ? 1 : 0]);
     },
+    // Whether each effect is shown, then each scripted value as four numbers.
+    effects: () => Array.from(shown).concat(values.flatMap((held) => held.numbers)),
     // Text layers whose words changed since this was last asked, as [object index, words].
     written() {
         const changed = [...written].map((index) => [String(index), texts[index]]);
@@ -372,7 +448,7 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
     // Scripts that threw, as [object index, property, message]; they don't run again.
     failures: () => scripts
         .filter((script) => script.error !== null)
-        .map((script) => [String(script.object), script.property, script.error])
+        .map((script) => [String(script.object), script.label, script.error])
         .concat(timerFailures.map((message) => ['-1', 'timer', message])),
     // A frame cut short leaves what was running then; it doesn't run again. Whether there
     // was anything to blame.

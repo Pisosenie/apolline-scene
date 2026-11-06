@@ -262,3 +262,91 @@ fn words_cut_inside_a_character_come_out_whole() {
     );
     assert!(written[0].1.chars().count() <= crate::text::CHARACTERS);
 }
+
+#[test]
+fn effects_are_shown_hidden_and_given_values_by_their_scripts() {
+    let show = scripted("export function update() { return engine.runtime >= 1; }");
+    let hide = scripted("export function update() { thisObject.visible = false; }");
+    let tint = scripted(
+        "let first;
+         export function init(value) { first = value; thisLayer.getEffect(3).visible = true; }
+         export function update(value) { return first.multiply(1 + engine.runtime); }",
+    );
+    let speed = scripted("export function update(value) { return value + 1; }");
+    let flag = scripted("export function update(value) { return !value; }");
+    let scene = scene(&format!(
+        r#"[{{"image": "a.json", "effects": [
+            {{"file": "a", "visible": {{"script": {show}, "value": false}}}},
+            {{"file": "b", "visible": {{"script": {hide}, "value": true}},
+              "passes": [{{"constantshadervalues": {{"color": {{"script": {tint}, "value": "0.1 0.2 0.3"}},
+                                                     "speed": {{"script": {speed}, "value": 2}}}}}},
+                         {{"constantshadervalues": {{"on": {{"script": {flag}, "value": true}}}}}}]}},
+            {{"file": "c", "visible": false}},
+            {{"file": "d", "visible": false}}
+        ]}}]"#
+    ));
+    // A script asks for effects by place, so the hidden ones stay for it to show.
+    assert_eq!(scene.effects().len(), 4);
+    let mut stage = stage(&scene);
+    stage.tick(at(1.0));
+    let (shown, values) = stage.effects();
+    assert_eq!(shown, [true, false, false, true]);
+    assert_eq!(values.len(), 3);
+    let close = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+    assert!(close(values[0], [0.2, 0.4, 0.6, 0.0]), "{:?}", values[0]);
+    // Two frames have run: the first when the stage was made.
+    assert_eq!(values[1][0], 4.0);
+    assert_eq!(values[2][0], 1.0);
+    stage.tick(at(2.0));
+    assert_eq!(stage.effects().1[2][0], 0.0);
+}
+
+#[test]
+fn hidden_effects_nothing_can_show_are_left_out() {
+    let speed = scripted("export function update(value) { return value; }");
+    let scene = scene(&format!(
+        r#"[{{"image": "a.json", "effects": [
+            {{"file": "a", "visible": false,
+              "passes": [{{"constantshadervalues": {{"speed": {{"script": {speed}, "value": 2}}}}}}]}},
+            {{"file": "b"}}
+        ]}}]"#
+    ));
+    let effects = scene.effects();
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].1.index, 1);
+    assert!(scene.scripts.is_empty());
+}
+
+#[test]
+fn an_effect_script_that_fails_is_named_by_where_it_is() {
+    let broken = scripted("export function update() { return thisObject.getMaterial(0); }");
+    let scene = scene(&format!(
+        r#"[{{"name": "logo", "image": "a.json", "effects": [{{"file": "a",
+            "passes": [{{"constantshadervalues": {{"speed": {{"script": {broken}, "value": 2}}}}}}]}}]}}]"#
+    ));
+    let error = Stage::new(&scene, &serde_json::Map::new())
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("logo's effects[0].passes[0].speed") && error.contains("effect.getMaterial"),
+        "{error}"
+    );
+}
+
+#[test]
+fn values_keep_their_shape_until_scripts_change_them() {
+    let same = scripted("export function update(value) { return value; }");
+    let scene = scene(&format!(
+        r#"[{{"image": "a.json", "effects": [{{"file": "a", "passes": [{{"constantshadervalues": {{
+            "colour": {{"script": {same}, "value": [0.1, 0.2, 0.3]}},
+            "on": {{"script": {same}, "value": "true"}},
+            "point": {{"script": {same}, "value": "1 2"}}}}}}]}}]}}]"#
+    ));
+    let mut stage = stage(&scene);
+    stage.tick(at(1.0));
+    let values = stage.effects().1;
+    assert_eq!(values[0][..3], [0.1, 0.2, 0.3]);
+    assert_eq!(values[1][0], 1.0);
+    assert_eq!(values[2][..2], [1.0, 2.0]);
+}

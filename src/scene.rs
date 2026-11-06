@@ -3,10 +3,12 @@
 //! by kind only, so a host can tell what isn't drawn yet.
 
 mod check;
+mod effects;
 
 use serde_json::Value;
 
 pub use check::Missing;
+pub use effects::Effect;
 
 use crate::Error;
 use crate::value::{flag, number, plain, text, vector};
@@ -19,7 +21,7 @@ pub struct Scene {
     pub clear: [f32; 3],
     pub parallax: Option<Parallax>,
     pub objects: Vec<Object>,
-    /// Scripts on objects' places and looks, in the order they run.
+    /// Scripts on objects' places and looks and on their effects, in the order they run.
     pub scripts: Vec<Script>,
     /// Each object's own place and look, before its parents move it, and what it hangs from.
     pub(crate) locals: Vec<Local>,
@@ -34,12 +36,40 @@ pub struct Scene {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Script {
     pub object: usize,
-    /// `origin`, `scale`, `angles`, `color`, `alpha`, `brightness`, `visible`, or a text
-    /// layer's `text`.
-    pub property: &'static str,
+    pub target: Target,
     pub source: String,
     /// The scene's values for the script's own properties, by name.
     pub properties: serde_json::Map<String, Value>,
+}
+
+/// The value a script is on.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    /// `origin`, `scale`, `angles`, `color`, `alpha`, `brightness`, `visible`, or a text
+    /// layer's `text`.
+    Object(&'static str),
+    /// Whether one of the object's effects is shown, by its place in the layer's list.
+    Shown(usize),
+    /// A value one of the object's effects gives a pass's shader, by the material's name for it.
+    Value {
+        effect: usize,
+        pass: usize,
+        name: String,
+    },
+}
+
+impl Script {
+    /// The value it's on, as a scene author would find it.
+    pub fn label(&self) -> String {
+        match &self.target {
+            Target::Object(property) => (*property).to_owned(),
+            Target::Shown(effect) => format!("effects[{effect}].visible"),
+            Target::Value { effect, pass, name } => {
+                let name: String = name.chars().take(64).collect();
+                format!("effects[{effect}].passes[{pass}].{name}")
+            }
+        }
+    }
 }
 
 /// The object values a script can be on.
@@ -118,8 +148,8 @@ pub struct Image {
     pub visible: bool,
     /// How far it moves with the pointer, relative to the scene's parallax amount.
     pub depth: [f32; 2],
-    /// The effects on it that are shown, as the scene gives them, in drawing order.
-    pub effects: Vec<Value>,
+    /// Its effects in drawing order: those shown, and those hidden that scripts may show.
+    pub effects: Vec<Effect>,
 }
 
 impl Image {
@@ -207,7 +237,10 @@ impl Scene {
         let objects: Vec<Object> = raw.iter().map(object).collect();
         let locals: Vec<Local> = raw.iter().map(local).collect();
         let tree = tree(raw);
-        let objects = hang(objects, &pose(&locals, &tree));
+        let objects = effects::keep(
+            hang(objects, &pose(&locals, &tree)),
+            effects::looked_up(raw),
+        );
         Ok(Scene {
             size: size.unwrap_or(DEFAULT_SIZE),
             perspective: size.is_none(),
@@ -223,6 +256,34 @@ impl Scene {
                 .collect(),
             refused: check::refusals(root),
         })
+    }
+
+    /// Every effect kept on the scene's layers with the object it's on, in object order: the
+    /// effects scripts can show and hide, as they're numbered for them.
+    pub(crate) fn effects(&self) -> Vec<(usize, &Effect)> {
+        self.objects
+            .iter()
+            .enumerate()
+            .flat_map(|(at, object)| {
+                let effects: &[Effect] = match object {
+                    Object::Image(image) | Object::Text(Text { layer: image, .. }) => {
+                        &image.effects
+                    }
+                    _ => &[],
+                };
+                effects.iter().map(move |effect| (at, effect))
+            })
+            .collect()
+    }
+
+    /// Marks a hidden effect as one that can't be drawn, so scripts that show it fail.
+    pub(crate) fn undrawn(&mut self, object: usize, effect: usize, why: &str) {
+        if let Some(Object::Image(image) | Object::Text(Text { layer: image, .. })) =
+            self.objects.get_mut(object)
+            && let Some(found) = image.effects.iter_mut().find(|found| found.index == effect)
+        {
+            found.undrawn = Some(why.chars().take(300).collect());
+        }
     }
 
     pub fn images(&self) -> impl Iterator<Item = &Image> {
@@ -353,14 +414,7 @@ fn picture(value: &Value, model: &str) -> Image {
         anchor: anchor(text(field("alignment")).unwrap_or("center")),
         visible: flag(field("visible")).unwrap_or(true),
         depth: vector(field("parallaxDepth"), [1.0; 2]),
-        effects: field("effects")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|effect| flag(effect.get("visible")).unwrap_or(true))
-            .take(64)
-            .cloned()
-            .collect(),
+        effects: effects::listed(field("effects")),
     }
 }
 
@@ -468,7 +522,8 @@ fn hang(mut objects: Vec<Object>, poses: &[Pose]) -> Vec<Object> {
     objects
 }
 
-/// The scripts on drawn objects' values. Scripts anywhere else are refused by the checks.
+/// The scripts on drawn objects' values and on their effects. Scripts anywhere else are
+/// refused by the checks.
 fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
     let mut found = Vec::new();
     for (at, (value, object)) in raw.iter().zip(objects).enumerate() {
@@ -486,7 +541,7 @@ fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
             };
             found.push(Script {
                 object: at,
-                property,
+                target: Target::Object(property),
                 source: source.to_owned(),
                 properties: fields
                     .get("scriptproperties")
@@ -495,6 +550,7 @@ fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
                     .unwrap_or_default(),
             });
         }
+        found.extend(effects::scripts(at, objects));
     }
     found
 }
@@ -643,8 +699,8 @@ mod tests {
         assert_eq!(label.layer.origin, [10.0, 20.0, 0.0]);
         assert_eq!(scene.scripts.len(), 1);
         assert_eq!(
-            (scene.scripts[0].object, scene.scripts[0].property),
-            (0, "text")
+            (scene.scripts[0].object, &scene.scripts[0].target),
+            (0, &Target::Object("text"))
         );
     }
 }

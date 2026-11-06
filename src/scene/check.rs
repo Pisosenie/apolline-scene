@@ -337,7 +337,9 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
                 continue;
             }
             let path = format!("objects[{at}].{key}");
-            if nested_script(value) {
+            if key == "effects" && known.contains(&"effects") {
+                effect_scripts(value, &path, &mut note);
+            } else if nested_script(value) {
                 note(Missing::Scripted(path));
             } else {
                 animated(value, &path, &mut note);
@@ -404,6 +406,57 @@ fn animated(value: &Value, path: &str, note: &mut impl FnMut(Missing)) {
             Missing::Animated(path.to_owned())
         });
     }
+}
+
+/// Scripts in a layer's effects that don't run: those anywhere but on whether an effect is
+/// shown and on the values its passes give their shaders. A value whose script plays an
+/// animation is an animated one.
+fn effect_scripts(effects: &Value, path: &str, note: &mut impl FnMut(Missing)) {
+    let scripted = || Missing::Scripted(path.to_owned());
+    let mut found = Vec::new();
+    let stray = |value: &Value, found: &mut Vec<Missing>| {
+        if nested_script(value) {
+            found.push(scripted());
+        }
+    };
+    fn passes(effect: &Value) -> Option<&Vec<Value>> {
+        effect.get("passes").and_then(Value::as_array)
+    }
+    for effect in effects.as_array().into_iter().flatten() {
+        let Some(fields) = effect.as_object() else {
+            stray(effect, &mut found);
+            continue;
+        };
+        for (key, value) in fields {
+            if !(key == "visible" && run(value) || key == "passes" && passes(effect).is_some()) {
+                stray(value, &mut found);
+            }
+        }
+        for pass in passes(effect).into_iter().flatten() {
+            let Some(pass) = pass.as_object() else {
+                stray(pass, &mut found);
+                continue;
+            };
+            for (key, value) in pass {
+                let Some(values) = value.as_object().filter(|_| key == "constantshadervalues")
+                else {
+                    stray(value, &mut found);
+                    continue;
+                };
+                for value in values.values().filter(|value| !run(value)) {
+                    if nested_script(value) && value.get("animation").is_some() {
+                        found.push(Missing::Animated(path.to_owned()));
+                    } else {
+                        stray(value, &mut found);
+                    }
+                }
+            }
+        }
+    }
+    if !effects.is_array() {
+        stray(effects, &mut found);
+    }
+    found.into_iter().for_each(note);
 }
 
 /// A script anywhere in a value: on an effect's values, a particle override, anything the
@@ -512,7 +565,11 @@ mod tests {
             "general": {"zoom": script},
             "objects": [
                 {"image": "a.json", "alpha": script, "visible": script,
-                 "effects": [{"file": "e.json", "passes": [{"constantshadervalues": {"speed": script}}]}]},
+                 "effects": [{"file": "e.json", "visible": script,
+                              "passes": [{"constantshadervalues": {"speed": script}}]}]},
+                {"image": "b.json", "effects": [{"file": "e.json", "passes": [{"combos": {"A": script}}]}]},
+                {"image": "c.json", "effects": [{"file": "e.json", "passes": [{"constantshadervalues":
+                    {"speed": {"script": "export function update() {}", "value": 1, "animation": {}}}}]}]},
                 {"particle": "p.json", "instanceoverride": {"rate": script}},
                 {"name": "group", "origin": script},
                 {"sound": ["a.mp3"], "volume": script}
@@ -521,9 +578,10 @@ mod tests {
         assert_eq!(
             refusals(&scene),
             [
-                Missing::Scripted("objects[0].effects".into()),
-                Missing::Scripted("objects[1].instanceoverride".into()),
-                Missing::Scripted("objects[3].volume".into()),
+                Missing::Scripted("objects[1].effects".into()),
+                Missing::Animated("objects[2].effects".into()),
+                Missing::Scripted("objects[3].instanceoverride".into()),
+                Missing::Scripted("objects[5].volume".into()),
                 Missing::Scripted("general.zoom".into()),
             ]
         );

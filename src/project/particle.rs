@@ -118,6 +118,7 @@ impl Project {
             blending,
             fullscreen: false,
             effects: Vec::new(),
+            undrawn: Vec::new(),
             particles: Some(Arc::new(system)),
             text: None,
         })

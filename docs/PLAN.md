@@ -48,10 +48,12 @@ match their authors' previews; with scripts and text layers drawn, nine do. What
 rest, by scenes:
 
 - SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers. Scripts
-  on objects' place and look and on text layers' words run now (below); what keeps those
-  scenes out is mostly scripted effect values (15), particle overrides (8), bloom and property
-  conditions, and in four scenes `thisScene.createLayer`/`destroyLayer` and
-  `getTransformMatrix`.
+  on objects' place and look, on text layers' words and on effects run now (below); what keeps
+  those scenes out is mostly particle overrides (8), effect values animated by timelines that
+  scripts start (9), bloom and property conditions, and in four scenes
+  `thisScene.createLayer`/`destroyLayer` and `getTransformMatrix`. None of the 15 scenes with
+  effect scripts was held by them alone; the survey's "a few steps away" table shows what
+  each near scene still lacks.
 - Particle system `flags`, 31, and child systems, sprite sheets, ropes and trails, 10 each.
 - Render targets (`_rt_FullFrameBuffer` and friends), 23: blend modes, composition layers.
 - Text layers, 29 (`unknown-object`), drawn since (below). Groups, `parent` links and solid
@@ -113,8 +115,18 @@ documented API. Angles are degrees to scripts. Each frame the objects' own value
 back and composed through their parents, so a scripted group carries its children, and
 hidden layers stay loaded for scripts to show. Cursor and media events never come. A script
 that throws or asks for what isn't here refuses the scene with the member it asked for; one
-that throws later just stops. Next: scripted effect values and particle overrides (uniforms
-and emitter rates per frame), then `getTransformMatrix`.
+that throws later just stops. Next: particle overrides (emitter rates per frame), then
+`getTransformMatrix`.
+
+Scripts on effects run too: on an effect's `visible`, where `thisObject` is the effect, and on
+the values its passes give their shaders (`update(value)` gets a number, a vector or a flag
+and returns the new one, which becomes that uniform). `thisLayer.getEffect(place or name)` and
+`getEffectCount()` reach any of a layer's effects. A hidden effect stays loaded when a script
+could show it: one on its `visible`, or any script that looks effects up. One that can't be
+drawn doesn't refuse the scene; a script that shows it fails with why, which refuses the scene
+on its first frame and stops just that script later. Media events that would show such
+effects (album art through `usertextures`) never come, so those scenes aren't held by them. A
+chain draws again only when a script changes what it draws.
 
 **Text layers**, done: words in the project's font, or a system font (`systemfont_arial` and
 the rest found on the machine or a look-alike with its widths, else Wallpaper Engine's own Noto

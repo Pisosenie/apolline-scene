@@ -1,7 +1,7 @@
 //! A layer with effects is drawn into a texture of its own size first: its own material, then
 //! each effect pass over the result of the one before, back and forth between two targets.
 //! The scene then places the last result like a plain layer. A chain nothing animates is
-//! drawn once.
+//! drawn once, and again when scripts show or hide its effects or change their values.
 
 use std::cell::Cell;
 
@@ -15,16 +15,29 @@ pub(super) struct Chain {
     targets: [Target; 2],
     size: (u32, u32),
     steps: Vec<Step>,
+    /// What each step after the layer's own draws, and whether each step is drawn.
+    passes: Vec<Pass>,
+    shown: Vec<bool>,
     animated: bool,
     /// The screen it was last drawn for, which effects can read.
     drawn: Cell<Option<(u32, u32)>>,
+}
+
+/// Which pass of which of the layer's effects a step draws, and the material values its
+/// constants come from.
+pub(super) struct Pass {
+    pub effect: usize,
+    pub pass: usize,
+    pub visible: bool,
+    pub keys: Vec<Option<String>>,
 }
 
 /// Draws a whole target, with its top row first like an uploaded texture's.
 const WHOLE: super::Affine = [[2.0, 0.0, 0.0], [0.0, -2.0, 0.0]];
 
 impl Chain {
-    /// `steps` start with the layer's own; each after it reads the one before in slot 0.
+    /// `steps` start with the layer's own; each after it, one of `passes`, reads the one
+    /// drawn before it in slot 0.
     ///
     /// # Safety
     /// The GL context must be current on this thread.
@@ -32,8 +45,12 @@ impl Chain {
         gl: &glow::Context,
         size: (u32, u32),
         steps: Vec<Step>,
+        passes: Vec<Pass>,
         animated: bool,
     ) -> Result<Self, Error> {
+        let shown = std::iter::once(true)
+            .chain(passes.iter().map(|pass| pass.visible))
+            .collect();
         unsafe {
             let first = Target::new(gl, size)?;
             let second = match Target::new(gl, size) {
@@ -47,6 +64,8 @@ impl Chain {
                 targets: [first, second],
                 size,
                 steps,
+                passes,
+                shown,
                 animated,
                 drawn: Cell::new(None),
             })
@@ -72,9 +91,43 @@ impl Chain {
         self.drawn.set(None);
     }
 
-    /// The texture the last step draws into, which holds the layer's finished picture.
+    /// The texture the last step drawn draws into, which holds the layer's finished picture.
     pub fn result(&self) -> glow::Texture {
-        self.targets[(self.steps.len() - 1) % 2].texture
+        let drawn = self.shown.iter().filter(|&&shown| shown).count();
+        self.targets[(drawn - 1) % 2].texture
+    }
+
+    /// The steps that draw a pass of the layer's effect `effect`, with the pass each draws.
+    pub fn steps_of(&self, effect: usize) -> impl Iterator<Item = (usize, &Pass)> {
+        self.passes
+            .iter()
+            .enumerate()
+            .filter(move |(_, pass)| pass.effect == effect)
+            .map(|(at, pass)| (at + 1, pass))
+    }
+
+    /// Shows or hides an effect pass's step; it's drawn again when that changes anything.
+    pub fn show(&mut self, step: usize, shown: bool) {
+        if step > 0 && self.shown.get(step).is_some_and(|&was| was != shown) {
+            self.shown[step] = shown;
+            self.drawn.set(None);
+        }
+    }
+
+    /// Gives one of a step's constants new numbers, as many as it takes.
+    pub fn set(&mut self, step: usize, constant: usize, numbers: [f32; 4]) {
+        let Some((_, value)) = self
+            .steps
+            .get_mut(step)
+            .and_then(|step| step.constants.get_mut(constant))
+        else {
+            return;
+        };
+        let now = value.with(numbers);
+        if now != *value {
+            *value = now;
+            self.drawn.set(None);
+        }
     }
 
     /// Draws the chain unless nothing in it has changed since it was last drawn for this
@@ -102,7 +155,12 @@ impl Chain {
         unsafe {
             gl.disable(glow::BLEND);
             gl.viewport(0, 0, width as i32, height as i32);
-            for (at, step) in self.steps.iter().enumerate() {
+            let shown = self
+                .steps
+                .iter()
+                .zip(&self.shown)
+                .filter(|(_, shown)| **shown);
+            for (at, (step, _)) in shown.enumerate() {
                 let target = &self.targets[at % 2];
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
                 gl.clear_color(0.0, 0.0, 0.0, 0.0);
