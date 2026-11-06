@@ -643,7 +643,9 @@ impl Renderer {
             if let Some(bloom) = &self.bloom
                 && let Some(frame) = self.frame.copy(gl, target)
             {
-                bloom.draw(gl, frame, target, &host);
+                // Within the letterbox, as the layers were.
+                bloom.draw(gl, frame, target, &host, fit == Fit::Contain);
+                gl.disable(glow::SCISSOR_TEST);
             }
             gl.disable(glow::BLEND);
             gl.color_mask(true, true, true, true);

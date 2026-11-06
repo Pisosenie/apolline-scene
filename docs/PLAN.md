@@ -144,7 +144,13 @@ effect values: each is a driven value, and what it returns scales the running sy
 share of the value it started from, which the system was made with; a scripted count gets
 room for the most particles. Emitters with an audio response (mode 3, both channels) let
 out as much of their rate as the music is loud over their bands between their bounds, none
-in silence; one-channel modes, and audio responses anywhere else, are refused.
+in silence; one-channel modes, and audio responses anywhere else, are refused. System flags
+read as worldspace 1, sprite sheet frames without blending 2 (set with random frames in
+stock embers), perspective 4, and colour, count, lifetime, size and speed overrides left out
+8 to 128 (the stock lightning spawner's 248 is all five). One-channel particle sprites are
+white shapes with the channel as alpha, as the stock particle shader converts them; they
+were drawn as opaque grey squares before. A shader's own uniforms declared after an include
+go first, since stock headers such as `common_blur.h` read them.
 
 **F. SceneScript**, done for objects: each `{script, scriptproperties, value}` on an image,
 particle system or group's `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or

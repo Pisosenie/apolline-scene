@@ -58,8 +58,9 @@ void main() {
     if (blend > 0.0) {
         pixel = mix(pixel, texture(picture, next_uv), blend);
     }
+    // A one-channel sprite is a shape in white, as Wallpaper Engine's particle shader reads it.
     if (picture_channels == 1) {
-        pixel = vec4(pixel.rrr, 1.0);
+        pixel = vec4(1.0, 1.0, 1.0, pixel.r);
     } else if (picture_channels == 2) {
         pixel = vec4(pixel.rrr, pixel.g);
     }
@@ -152,7 +153,7 @@ impl Swarm {
         capacity.max(1) * FLOATS * 4
     }
 
-    /// Scales one of the system's instance overrides by `factor` from where it started.
+    /// Scales one of the system's instance overrides by `factor` from where its file leaves it.
     pub fn tune(&self, key: &str, factor: f32) {
         self.simulation.borrow_mut().tune(key, factor);
     }
@@ -209,6 +210,7 @@ impl Swarm {
         simulation.seek(time);
         let perspective = simulation.perspective();
         let sheet = simulation.sheet();
+        let crisp = simulation.crisp();
         let renderer = simulation.renderer();
         let particles = simulation.particles();
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
@@ -223,7 +225,8 @@ impl Swarm {
                 0.0
             };
             let (at, near) = seen(at, depth, middle, distance);
-            let ([now, next], onward) = frames(self.corners.len(), particle.sheet(sheet), sheet);
+            let ([now, next], onward) =
+                frames(self.corners.len(), particle.sheet(sheet), sheet, crisp);
             let (turn, stretch) = match renderer {
                 Renderer::Sprite => (particle.rotation + angle, self.ratio),
                 Renderer::Trail { length, min, max } => {
@@ -288,12 +291,13 @@ fn trail(velocity: [f32; 2], angle: f32, [length, min, max]: [f32; 3]) -> (f32, 
 
 /// Which of `count` frames a particle `through` its sheet shows and the one after, and how far
 /// it is on to that one: only a sequence blends, and its last frame stays.
-fn frames(count: usize, through: f32, sheet: Sheet) -> ([usize; 2], f32) {
+fn frames(count: usize, through: f32, sheet: Sheet, crisp: bool) -> ([usize; 2], f32) {
     let last = count.saturating_sub(1);
     let at = through.clamp(0.0, 1.0) * count as f32;
     let now = (at.floor() as usize).min(last);
     match sheet {
         Sheet::Random => ([now; 2], 0.0),
+        Sheet::Sequence(_) if crisp => ([now; 2], 0.0),
         Sheet::Sequence(_) => (
             [now, (now + 1).min(last)],
             if now < last { at.fract() } else { 0.0 },
@@ -343,12 +347,14 @@ mod tests {
     #[test]
     fn a_sequence_blends_frame_into_frame_and_a_random_pick_holds_one() {
         let sequence = Sheet::Sequence(1.0);
-        assert_eq!(frames(4, 0.0, sequence), ([0, 1], 0.0));
-        assert_eq!(frames(4, 0.375, sequence), ([1, 2], 0.5));
-        assert_eq!(frames(4, 0.99, sequence).0, [3, 3]);
-        assert_eq!(frames(4, 0.99, sequence).1, 0.0);
-        assert_eq!(frames(4, 0.6, Sheet::Random), ([2, 2], 0.0));
-        assert_eq!(frames(1, 0.5, sequence), ([0, 0], 0.0));
+        assert_eq!(frames(4, 0.0, sequence, false), ([0, 1], 0.0));
+        assert_eq!(frames(4, 0.375, sequence, false), ([1, 2], 0.5));
+        assert_eq!(frames(4, 0.99, sequence, false).0, [3, 3]);
+        assert_eq!(frames(4, 0.99, sequence, false).1, 0.0);
+        assert_eq!(frames(4, 0.6, Sheet::Random, false), ([2, 2], 0.0));
+        assert_eq!(frames(1, 0.5, sequence, false), ([0, 0], 0.0));
+        // Without frame blending, each frame shows whole until the next.
+        assert_eq!(frames(4, 0.375, sequence, true), ([1, 1], 0.0));
     }
 
     #[test]

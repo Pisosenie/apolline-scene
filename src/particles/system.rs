@@ -23,6 +23,10 @@ pub struct System {
     pub perspective: bool,
     /// How its sprite sheet's frames are shown, when its texture is one.
     pub sheet: Sheet,
+    /// Its sprite sheet's frames show one at a time, not blended into the next.
+    pub crisp: bool,
+    /// The flags of the instance overrides it leaves out.
+    pub fixed: u32,
     pub renderer: Renderer,
     /// Systems let out once with it, each placed from its origin.
     pub children: Vec<Child>,
@@ -37,6 +41,23 @@ pub struct Child {
     pub origin: [f32; 3],
     pub scale: [f32; 3],
     pub angles: [f32; 3],
+    /// How many particles it may have, in place of its own file's count.
+    pub max: Option<usize>,
+}
+
+impl System {
+    /// Whether an instance override of `key` changes it.
+    pub fn overridable(&self, key: &str) -> bool {
+        let flag = match key {
+            "color" | "colorn" => 8,
+            "count" => 16,
+            "lifetime" => 32,
+            "size" => 64,
+            "speed" => 128,
+            _ => 0,
+        };
+        self.fixed & flag == 0
+    }
 }
 
 const CHILD: &[&str] = &[
@@ -66,9 +87,13 @@ pub enum Sheet {
     Sequence(f32),
 }
 
-/// The system flags that are drawn: worldspace and perspective rendering.
+/// The system flags that are drawn: worldspace, sprite sheets without frame blending,
+/// perspective rendering, and instance overrides of colour, count, lifetime, size and speed
+/// left out.
 const WORLD: u32 = 1;
+const CRISP: u32 = 2;
 const PERSPECTIVE: u32 = 4;
+const FIXED: u32 = 0xF8;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
@@ -305,7 +330,10 @@ impl System {
     pub fn from_value(root: &Value) -> Result<Self, Error> {
         known(root, ROOT, "particle system")?;
         let flags = number(root.get("flags")).unwrap_or(0.0);
-        if flags < 0.0 || flags.fract() != 0.0 || flags as u32 & !(WORLD | PERSPECTIVE) != 0 {
+        if flags < 0.0
+            || flags.fract() != 0.0
+            || flags as u32 & !(WORLD | CRISP | PERSPECTIVE | FIXED) != 0
+        {
             return Err(refuse("particle system flags"));
         }
         let flags = flags as u32;
@@ -330,6 +358,11 @@ impl System {
             if number(child.get("probability")).is_some_and(|chance| chance < 1.0) {
                 return Err(refuse("child particle systems let out by chance"));
             }
+            for key in ["flags", "controlpointstartindex"] {
+                if number(child.get(key)).is_some_and(|value| value != 0.0) {
+                    return Err(refuse(&format!("child particle system {key}")));
+                }
+            }
             let file = text(child.get("name"))
                 .ok_or_else(|| refuse("a child particle system without a file"))?;
             children.push(Child {
@@ -337,6 +370,7 @@ impl System {
                 origin: vector(child.get("origin"), [0.0; 3]),
                 scale: vector(child.get("scale"), [1.0; 3]),
                 angles: vector(child.get("angles"), [0.0; 3]),
+                max: number(child.get("maxcount")).map(|max| max.clamp(0.0, MOST as f32) as usize),
             });
             if children.len() > 8 {
                 return Err(refuse("more than 8 child particle systems"));
@@ -403,6 +437,8 @@ impl System {
             operators,
             world: flags & WORLD != 0,
             perspective: flags & PERSPECTIVE != 0,
+            crisp: flags & CRISP != 0,
+            fixed: flags & FIXED,
             sheet,
             renderer,
             children,
@@ -716,7 +752,7 @@ mod tests {
         assert_eq!(system.spawn.color.high, [128.0 / 255.0, 128.0 / 255.0, 1.0]);
         assert_eq!(system.operators.len(), 2);
         assert!(!system.world && !system.perspective);
-        // Worldspace is 1 and perspective rendering 4; 2 isn't drawn yet.
+        // Worldspace is 1 and perspective rendering 4.
         let flagged = |flags: u32| {
             System::parse(&RAIN.replace(
                 r#""starttime": 2"#,
@@ -732,9 +768,15 @@ mod tests {
         assert!(!unnamed.contains("renderer"));
         assert_eq!(System::parse(&unnamed).unwrap().renderer, Renderer::Sprite);
         let both = flagged(5).unwrap();
-        assert!(both.world && both.perspective);
+        assert!(both.world && both.perspective && !both.crisp);
+        // 2 shows sprite sheet frames whole; 8 to 128 leave colour, count, lifetime, size and
+        // speed overrides out.
+        let fixed = flagged(2 | 16 | 128).unwrap();
+        assert!(fixed.crisp);
+        assert!(!fixed.overridable("count") && !fixed.overridable("speed"));
+        assert!(fixed.overridable("colorn") && fixed.overridable("rate"));
         assert!(
-            flagged(2)
+            flagged(256)
                 .err()
                 .unwrap()
                 .to_string()
@@ -774,6 +816,11 @@ mod tests {
                 r#""starttime": 2"#,
                 r#""starttime": 2, "children": [{"name": "x", "type": "eventdeath"}]"#,
                 "child particle",
+            ),
+            (
+                r#""starttime": 2"#,
+                r#""starttime": 2, "children": [{"name": "x", "controlpointstartindex": 1}]"#,
+                "child particle system controlpointstartindex",
             ),
             (
                 r#""name": "movement""#,

@@ -218,8 +218,12 @@ impl Simulation {
         self.most = most;
     }
 
-    /// Scales instance override `key` by `factor` from what the system started with.
+    /// Scales instance override `key` by `factor` from what the system's file says, unless
+    /// the system leaves that override out.
     pub fn tune(&mut self, key: &str, factor: f32) {
+        if !self.system.overridable(key) {
+            return;
+        }
         let factor = if factor.is_finite() {
             factor.clamp(0.0, 1000.0)
         } else {
@@ -252,6 +256,11 @@ impl Simulation {
         self.system.renderer
     }
 
+    /// Whether its sprite sheet's frames show one at a time, not blended into the next.
+    pub fn crisp(&self) -> bool {
+        self.system.crisp
+    }
+
     /// How its particles show a sprite sheet.
     pub fn sheet(&self) -> Sheet {
         self.system.sheet
@@ -275,12 +284,13 @@ impl Simulation {
             .retain(|particle| particle.age < particle.life);
         for (at, emitter) in system.emitters.iter().enumerate() {
             self.owed[at] += emitter.rate * self.tuning.rate * self.heard[at] * STEP;
-            while self.owed[at] >= 1.0 {
-                self.owed[at] -= 1.0;
-                if self.particles.len() < self.room() {
-                    let particle = self.spawn(at);
-                    self.particles.push(particle);
-                }
+            // Whatever it owes past the room there is goes unspent, however fast it asks.
+            let due = self.owed[at].floor();
+            self.owed[at] -= due;
+            let free = self.room().saturating_sub(self.particles.len());
+            for _ in 0..(due as usize).min(free) {
+                let particle = self.spawn(at);
+                self.particles.push(particle);
             }
         }
         let controls = system
@@ -719,6 +729,14 @@ mod tests {
         crowded.tune("count", 10.0);
         crowded.advance(0.9);
         assert_eq!(crowded.particles().len(), 80);
+        // However much it's asked for, a step lets out no more than there's room for.
+        let flood = FOUNTAIN.replace(r#""rate": 30"#, r#""rate": 100000"#);
+        let mut flooded = Simulation::new(system(&flood), 7);
+        flooded.allow(80);
+        flooded.tune("rate", 1000.0);
+        flooded.tune("count", 10.0);
+        flooded.advance(1.0);
+        assert_eq!(flooded.particles().len(), 80);
         let mut plain = Simulation::new(system(FOUNTAIN), 7);
         plain.advance(0.9);
         assert!(plain.particles().len() < 50);

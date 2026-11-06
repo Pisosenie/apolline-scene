@@ -135,7 +135,8 @@ impl Bloom {
     }
 
     /// Adds the bloom of `frame`, the frame drawn so far `size` big, back over it in the host's
-    /// framebuffer, which `host` binds again. Leaves blending and the program to the caller.
+    /// framebuffer, which `host` binds again, within the scissor box when `boxed`. Leaves
+    /// blending, scissoring and the program to the caller.
     ///
     /// # Safety
     /// The GL context must be current on this thread, with scissoring off and alpha writes
@@ -146,6 +147,7 @@ impl Bloom {
         frame: glow::Texture,
         size: (u32, u32),
         host: &super::state::Host,
+        boxed: bool,
     ) {
         if self.settings.strength <= 0.0 {
             return;
@@ -193,6 +195,9 @@ impl Bloom {
             gl.viewport(0, 0, size.0 as i32, size.1 as i32);
             gl.use_program(Some(self.add.id));
             gl.bind_texture(glow::TEXTURE_2D, Some(across.texture));
+            if boxed {
+                gl.enable(glow::SCISSOR_TEST);
+            }
             gl.enable(glow::BLEND);
             gl.blend_func(glow::ONE, glow::ONE);
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);

@@ -18,7 +18,7 @@ impl Project {
         resources: &mut Resources,
         remaining: &mut usize,
     ) -> Result<Vec<Layer>, Error> {
-        let mut family = vec![self.particle_layer(placed, resources, remaining)?];
+        let mut family = vec![self.particle_layer(placed, None, resources, remaining)?];
         // How many systems each one is down from the top.
         let mut generations = vec![0];
         let mut at = 0;
@@ -38,7 +38,7 @@ impl Project {
                     file: child.file.clone(),
                     ..placed.clone()
                 };
-                let layer = self.particle_layer(&file, resources, remaining)?;
+                let layer = self.particle_layer(&file, child.max, resources, remaining)?;
                 born.push(Layer {
                     child: Some(within(parent.child.as_ref(), child)),
                     ..layer
@@ -55,9 +55,11 @@ impl Project {
         Ok(family)
     }
 
+    /// One system's layer; `max`, a child's own count, takes the place of its file's.
     fn particle_layer(
         &self,
         placed: &Particles,
+        max: Option<usize>,
         resources: &mut Resources,
         remaining: &mut usize,
     ) -> Result<Layer, Error> {
@@ -72,7 +74,12 @@ impl Project {
                 "scripted particles need another renderer".into(),
             ));
         }
-        let system = overridden(System::from_value(&json)?, &placed.overrides)?;
+        let system = System::from_value(&json)?;
+        let system = System {
+            max: max.unwrap_or(system.max),
+            ..system
+        };
+        let system = overridden(system, &placed.overrides)?;
         if !relative(&system.material) {
             return Err(Error::Format(
                 "particle material must stay inside the project".into(),
@@ -215,6 +222,7 @@ fn within(parent: Option<&Child>, child: &Child) -> Child {
         ],
         scale: [0, 1, 2].map(|axis| parent.scale[axis] * child.scale[axis]),
         angles: [0, 1, 2].map(|axis| parent.angles[axis] + child.angles[axis]),
+        max: child.max,
     }
 }
 
@@ -224,7 +232,11 @@ fn overridden(
     overrides: &serde_json::Map<String, Value>,
 ) -> Result<System, Error> {
     for (key, value) in overrides {
-        if key == "id" {
+        // Scripted ones scale the system as it runs, from where its file leaves it; the older
+        // byte colour gives way to the newer one.
+        let scripted = value.get("script").is_some();
+        let older = key == "color" && overrides.contains_key("colorn");
+        if key == "id" || scripted || older || !system.overridable(key) {
             continue;
         }
         let factor = || {
@@ -253,6 +265,9 @@ fn overridden(
                 velocity.high = velocity.high.map(|v| v * factor);
                 for emitter in &mut system.emitters {
                     emitter.speed = emitter.speed.map(|v| v * factor);
+                }
+                if let Some(turbulent) = &mut system.spawn.turbulent {
+                    turbulent.speed = turbulent.speed.map(|v| v * factor);
                 }
             }
             // A tint, from 0 to 1 or, in older scenes, 0 to 255.

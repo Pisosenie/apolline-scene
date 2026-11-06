@@ -479,6 +479,15 @@ impl<F: FnMut(&str) -> Result<Option<String>, Error>> Expansion<F> {
             .position(|entry| entry == name)
             .unwrap_or(0)
             + 1;
+        let hoisted = if self.stack.is_empty() {
+            hoisted(&source)
+        } else {
+            Vec::new()
+        };
+        for &at in &hoisted {
+            let line = source.lines().nth(at).unwrap_or_default();
+            self.append(&format!("#line {} {id}\n{line}\n", at + 1))?;
+        }
         self.append(&format!("#line 1 {id}\n"))?;
         self.stack.push(name.to_owned());
         let parent = name
@@ -486,6 +495,10 @@ impl<F: FnMut(&str) -> Result<Option<String>, Error>> Expansion<F> {
             .map_or("shaders", |(parent, _)| parent);
         let mut blocked = false;
         for (line, original) in source.lines().enumerate() {
+            if hoisted.contains(&line) {
+                self.append("\n")?;
+                continue;
+            }
             if !blocked && let Some(annotation) = original.trim().strip_prefix("// [COMBO]") {
                 let annotation: Value = serde_json::from_str(annotation)
                     .map_err(|error| fail(format!("{name}:{}: {error}", line + 1)))?;
@@ -549,6 +562,37 @@ impl<F: FnMut(&str) -> Result<Option<String>, Error>> Expansion<F> {
         self.stack.pop();
         Ok(())
     }
+}
+
+/// The lines of a shader's own uniforms after its first include, outside any conditional,
+/// which go first: Wallpaper Engine's headers use the uniforms of the shaders that include
+/// them, declared after the include.
+fn hoisted(source: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut blocked = false;
+    let mut depth = 0usize;
+    let mut included = false;
+    for (at, line) in source.lines().enumerate() {
+        let visible = visible_line(line, &mut blocked);
+        let visible = visible.trim();
+        if let Some(directive) = visible.strip_prefix('#').map(str::trim_start) {
+            let command = directive.split(char::is_whitespace).next().unwrap_or("");
+            match command {
+                "if" | "ifdef" | "ifndef" => depth += 1,
+                "endif" => depth = depth.saturating_sub(1),
+                "include" => included = true,
+                _ => {}
+            }
+        } else if included
+            && depth == 0
+            && !blocked
+            && visible.starts_with("uniform ")
+            && visible.ends_with(';')
+        {
+            found.push(at);
+        }
+    }
+    found
 }
 
 fn visible_line(line: &str, blocked: &mut bool) -> String {
@@ -691,6 +735,9 @@ mod tests {
             )]
         );
         assert!(fragment.source.contains("float half_value"));
+        // The shader's own uniforms come before the header, which may read them.
+        let at = |text: &str| fragment.source.find(text).unwrap();
+        assert!(at("uniform float u_Amount;") < at("float half_value"));
         assert!(!fragment.source.contains("#include"));
         assert_eq!(fragment.texcoord, 2);
         assert_eq!(fragment.files, ["shaders/demo.frag", "shaders/tone.h"]);

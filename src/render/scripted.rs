@@ -15,9 +15,9 @@ pub(super) struct Wiring {
     /// For each effect value scripts or timelines drive, as `Scene::driven` lists them: the
     /// layers, steps and constants it sets.
     knobs: Vec<Vec<(usize, usize, usize)>>,
-    /// For each instance override they drive, likewise: the particle layers it scales, and
-    /// the value it started from, which the system was made with.
-    tunes: Vec<Vec<(usize, &'static str, f32)>>,
+    /// For each instance override they drive, likewise: the particle layers it scales, which
+    /// were made as their files leave them.
+    tunes: Vec<Vec<(usize, &'static str)>>,
 }
 
 impl Wiring {
@@ -84,15 +84,14 @@ impl Wiring {
                 let Knob::Override(key) = driven.knob else {
                     return Vec::new();
                 };
-                let Some(Object::Particles(particles)) = scene.objects.get(driven.object) else {
+                if !matches!(scene.objects.get(driven.object), Some(Object::Particles(_))) {
                     return Vec::new();
-                };
-                let start = crate::value::number(particles.overrides.get(key)).unwrap_or(1.0);
+                }
                 layers
                     .iter()
                     .enumerate()
                     .filter(|(_, layer)| layer.object == driven.object && layer.swarm.is_some())
-                    .map(|(at, _)| (at, key, start))
+                    .map(|(at, _)| (at, key))
                     .collect()
             })
             .collect();
@@ -121,11 +120,9 @@ impl Wiring {
             }
         }
         for (tune, &[value, ..]) in self.tunes.iter().zip(values) {
-            for &(at, key, start) in tune {
-                if let Some(swarm) = &layers[at].swarm
-                    && start.abs() > 1e-6
-                {
-                    swarm.tune(key, value / start);
+            for &(at, key) in tune {
+                if let Some(swarm) = &layers[at].swarm {
+                    swarm.tune(key, value);
                 }
             }
         }
