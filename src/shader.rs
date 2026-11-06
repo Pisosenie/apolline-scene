@@ -405,13 +405,27 @@ const RESERVED: [&str; 12] = [
     "interface",
 ];
 
-fn unreserved(mut source: String) -> Result<String, Error> {
+fn unreserved(source: String) -> Result<String, Error> {
+    let mut renamed = source.clone();
     for word in RESERVED {
-        if source.contains(word) {
-            source = rename(&source, word, &format!("{word}_r"))?;
+        // A uniform keeps its name, since the host binds it by that name.
+        let bound = renamed.lines().any(|line| {
+            let mut words = line
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| !w.is_empty());
+            words.next() == Some("uniform") && words.any(|w| w == word)
+        });
+        if bound || !renamed.contains(word) {
+            continue;
+        }
+        // Only shaders that use the word go through the tokenizer, and one it can't read
+        // keeps its text: the driver gets the last word on it, as before.
+        match rename(&renamed, word, &format!("{word}_apolline")) {
+            Ok(done) => renamed = done,
+            Err(_) => return Ok(source),
         }
     }
-    Ok(source)
+    Ok(renamed)
 }
 
 /// A stage's whole source: the dialect, its combos, its body and the host's own main.
@@ -765,10 +779,16 @@ mod tests {
 
     #[test]
     fn words_gles_keeps_are_renamed_and_only_whole() {
-        let source = "vec4 sample = texture(g_Texture0, uv); // sample\nfloat samples = sample.r;";
+        let bound = "uniform float filter;\nvoid main() { gl_FragColor = vec4(filter); }";
+        assert_eq!(
+            unreserved(bound.to_owned()).unwrap(),
+            bound,
+            "the host binds it by name"
+        );
+        let source = "uniform sampler2D g_Texture0;\nvec4 sample = texture(g_Texture0, uv); // sample\nfloat samples = sample.r;";
         assert_eq!(
             unreserved(source.to_owned()).unwrap(),
-            "vec4 sample_r = texture(g_Texture0, uv); // sample\nfloat samples = sample_r.r;"
+            "uniform sampler2D g_Texture0;\nvec4 sample_apolline = texture(g_Texture0, uv); // sample\nfloat samples = sample_apolline.r;"
         );
     }
 
