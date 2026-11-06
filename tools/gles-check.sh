@@ -32,6 +32,7 @@ python3 "$root/tools/demo-scene.py" "$work/sprite" --sprite-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/pointer" --pointer-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/buffer" --buffer-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/composite" --composite-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/compose" --compose-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/inputs" --inputs-demo > /dev/null
@@ -143,5 +144,10 @@ done
 for project in vertex effect effect-script animation pointer buffer composite inputs script; do
     cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done
+# A composition layer draws the frame at the scene's size, so it's shot at that size, against
+# the plain demo shot so too.
+"$view" --shot "$work/compose.png" --shot-size 1920x1080 "$work/compose" 2>&1 | sed "s/^/compose: /"
+"$view" --shot "$work/demo-1080.png" --shot-size 1920x1080 "$work/demo" > /dev/null 2>&1
+[ "$(difference "$work/compose.png" "$work/demo-1080.png")" -eq 0 ] && echo "compose: same as demo" || echo "compose: DIFFERS from demo"
 # A frame read from inside a sprite sheet rounds its way to the picture a little differently.
 [ "$(difference "$work/sprite.png" "$work/demo.png")" -le 1 ] && echo "sprite: within one of demo" || echo "sprite: DIFFERS from demo"

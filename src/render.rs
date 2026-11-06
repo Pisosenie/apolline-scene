@@ -5,6 +5,7 @@
 mod build;
 mod chain;
 mod compile;
+mod compose;
 mod geometry;
 mod material;
 mod scripted;
@@ -63,6 +64,7 @@ void main() {
     color = pixel * tint;
 }";
 
+#[derive(Clone)]
 struct Input {
     slot: u8,
     texture: glow::Texture,
@@ -73,6 +75,7 @@ struct Input {
 type Values = Vec<(Option<glow::UniformLocation>, Constant)>;
 
 /// One draw of a quad: which program, what it reads and the values it's given.
+#[derive(Clone)]
 struct Step {
     program: usize,
     inputs: Vec<Input>,
@@ -107,6 +110,8 @@ struct Drawn {
     words: Option<words::Words>,
     /// The frames of a sprite sheet, which play as time goes on.
     sprite: Option<sprite::Sprite>,
+    /// A composition layer, whose chain reads the scene drawn so far under it.
+    compose: bool,
 }
 
 /// How a layer is placed from where its object is.
@@ -210,6 +215,8 @@ pub struct Renderer {
     wiring: scripted::Wiring,
     /// The objects whose finished pictures other layers' effects read.
     composited: std::collections::BTreeSet<usize>,
+    /// The frame drawn so far, copied for composition layers.
+    frame: compose::Frame,
     /// The size of the last target drawn to, which scripts see as the screen.
     screen: std::cell::Cell<(u32, u32)>,
 }
@@ -244,6 +251,7 @@ impl Renderer {
             stage: None,
             wiring: scripted::Wiring::default(),
             composited: std::collections::BTreeSet::new(),
+            frame: compose::Frame::default(),
             screen: std::cell::Cell::new((scene.size.0 as u32, scene.size.1 as u32)),
         };
         let mut builder = build::Builder::new(gl);
@@ -442,7 +450,12 @@ impl Renderer {
             for read in [true, false] {
                 for layer in &self.layers {
                     let wanted = self.composited.contains(&layer.object);
-                    let Some(chain) = layer.chain.as_ref().filter(|_| wanted == read) else {
+                    // A composition layer's chain waits for what's drawn under it.
+                    let Some(chain) = layer
+                        .chain
+                        .as_ref()
+                        .filter(|_| wanted == read && !layer.compose)
+                    else {
                         continue;
                     };
                     if !layer.visible && !wanted {
@@ -454,6 +467,7 @@ impl Renderer {
                         time,
                         delta,
                         placed,
+                        own: None,
                     };
                     chain.run(gl, &self.programs, at, &self.inputs, &pictures);
                     if wanted {
@@ -478,6 +492,32 @@ impl Renderer {
             gl.color_mask(true, true, true, false);
             let mut current_program = None;
             for layer in self.layers.iter().filter(|layer| layer.visible) {
+                if layer.compose
+                    && let Some(chain) = &layer.chain
+                {
+                    // What's been drawn so far, through the layer's effects, then back here.
+                    let (placed, _) = self.placed(layer, shift, target, fit);
+                    let Some(frame) = self.frame.copy(gl, target) else {
+                        continue;
+                    };
+                    gl.disable(glow::SCISSOR_TEST);
+                    gl.color_mask(true, true, true, true);
+                    let at = chain::Moment {
+                        screen: target,
+                        time,
+                        delta,
+                        placed,
+                        own: Some((frame, compose::reading(&placed))),
+                    };
+                    chain.run(gl, &self.programs, at, &self.inputs, &pictures);
+                    host.bind(gl);
+                    gl.viewport(0, 0, target.0 as i32, target.1 as i32);
+                    if fit == Fit::Contain {
+                        gl.enable(glow::SCISSOR_TEST);
+                    }
+                    gl.color_mask(true, true, true, false);
+                    current_program = None;
+                }
                 let program = &self.programs[layer.step.program];
                 if current_program != Some(layer.step.program) {
                     gl.use_program(Some(program.id));
@@ -575,6 +615,7 @@ impl Renderer {
                 gl.delete_vertex_array(program.vao);
                 gl.delete_program(program.id);
             }
+            self.frame.delete(gl);
         }
     }
 }

@@ -21,6 +21,8 @@ pub(super) struct Material {
     pub solid: bool,
     /// A plain image material that plays its texture's frames in turn.
     pub sprite: bool,
+    /// A composition layer: its picture is the scene drawn so far, under it.
+    pub compose: bool,
 }
 
 impl Project {
@@ -169,6 +171,26 @@ impl Project {
                 shade: [1.0; 2],
                 solid: true,
                 sprite: false,
+                compose: false,
+            });
+        }
+        // Wallpaper Engine's composition layers: what's been drawn under them, which their
+        // effects change.
+        if matches!(shader, "composelayer" | "passthrough")
+            && names == [Some("_rt_FullFrameBuffer".to_owned())]
+            && constants.is_empty()
+            && combos
+                .values()
+                .all(|value| crate::value::number(Some(value)) == Some(0.0))
+        {
+            return Ok(Material {
+                names: Vec::new(),
+                fragment: None,
+                blending,
+                shade: [1.0; 2],
+                solid: false,
+                sprite: false,
+                compose: true,
             });
         }
         if matches!(
@@ -189,6 +211,7 @@ impl Project {
                 shade,
                 solid: false,
                 sprite,
+                compose: false,
             });
         }
         let fragment = self.custom(shader, &combos, &constants, &mut names, None, resources)?;
@@ -199,6 +222,7 @@ impl Project {
             shade: [1.0; 2],
             solid: false,
             sprite: false,
+            compose: false,
         })
     }
 
@@ -366,8 +390,9 @@ pub(super) fn names(value: Option<&Value>) -> Result<Vec<Option<String>>, Error>
             Value::Null => Ok(None),
             Value::String(name) if name.is_empty() => Ok(None),
             Value::String(name) => {
-                // Another layer's finished picture is a name the effect resolves, not a file.
-                if crate::scene::composite(name).is_none() {
+                // Another layer's finished picture, or the scene's under a composition layer,
+                // is a name the renderer resolves, not a file.
+                if crate::scene::composite(name).is_none() && name != "_rt_FullFrameBuffer" {
                     texture_file(name)?;
                 }
                 Ok(Some(name.clone()))

@@ -20,6 +20,8 @@ demos.add_argument("--sprite-demo", action="store_true", help="make the sun a sp
 demos.add_argument("--pointer-demo", action="store_true", help="an effect on the turned sun that finds where the pointer, at rest mid-screen, is on the sun's picture, and turns it red unless that's where it is")
 demos.add_argument("--buffer-demo", action="store_true", help="an effect on the sun that copies it into a half-size buffer and checks the copy against the sun, turning it red where they differ")
 demos.add_argument("--composite-demo", action="store_true", help="a hidden copy of the sun whose finished picture an effect on the sun reads and checks against its own, turning it red where they differ")
+demos.add_argument("--compose-demo", action="store_true", help="a composition layer over the whole scene whose two inversions undo each other")
+parser.add_argument("--inversions", type=int, default=2, help="how many inversions --compose-demo's layer has (default 2)")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -335,6 +337,17 @@ void main() {
     gl_FragColor = distance(own, copy) < 0.05 ? own : vec4(1.0, 0.0, 0.0, 1.0);
 }
 """
+if args.compose_demo:
+    # Last over everything: the scene drawn so far, inverted as many times as asked.
+    scene = json.loads(files["scene.json"])
+    scene["objects"].append({"name": "adjust", "image": "models/compose.json",
+                             "effects": [{"file": "effects/flip/effect.json"}] * args.inversions})
+    files["scene.json"] = json.dumps(scene).encode()
+    files["models/compose.json"] = b'{"material": "materials/compose.json", "fullscreen": true, "passthrough": true}'
+    files["materials/compose.json"] = b'{"passes": [{"shader": "passthrough", "blending": "translucent", "textures": ["_rt_FullFrameBuffer"]}]}'
+    files["effects/flip/effect.json"] = b'{"name": "flip", "passes": [{"material": "materials/effects/flip.json"}]}'
+    files["materials/effects/flip.json"] = b'{"passes": [{"shader": "effects/flip", "textures": [null]}]}'
+    files["shaders/effects/flip.frag"] = b"varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { vec4 p = texSample2D(g_Texture0, v_TexCoord); gl_FragColor = vec4(1.0 - p.rgb, p.a); }\n"
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'

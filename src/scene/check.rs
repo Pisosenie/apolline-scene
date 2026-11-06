@@ -114,6 +114,7 @@ const IMAGE: &[&str] = &[
     "alignment",
     "alpha",
     "angles",
+    "config",
     "brightness",
     "castshadow",
     "clampuvs",
@@ -318,6 +319,17 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         let field = |name: &str| fields.get(name);
         if text(field("alignment")).is_some_and(|alignment| !ALIGNMENTS.contains(&alignment)) {
             note(Missing::Setting("layers aligned in an unknown way"));
+        }
+        // A composition layer's `passthrough` is what its model says already.
+        if field("config").is_some_and(|config| {
+            !config.is_null()
+                && !config.as_object().is_some_and(|config| {
+                    config
+                        .iter()
+                        .all(|(key, value)| key == "passthrough" && value.is_boolean())
+                })
+        }) {
+            note(Missing::Setting("layer configuration"));
         }
         if number(field("colorBlendMode")).is_some_and(|mode| mode != 0.0) {
             note(Missing::Setting("colour blend modes"));

@@ -62,6 +62,9 @@ pub struct Layer {
     pub undrawn: effect::Undrawn,
     /// Its texture's frames play in turn, as a sprite sheet.
     pub sprite: bool,
+    /// A composition layer: its picture is the scene drawn so far under it, which its effects
+    /// change.
+    pub compose: bool,
     /// A particle system drawn with its texture, in place of a picture.
     pub particles: Option<Arc<crate::particles::System>>,
     /// How a text layer's words are drawn, for when its scripts change them.
@@ -162,6 +165,7 @@ struct Resolved {
     shade: [f32; 2],
     solid: bool,
     sprite: bool,
+    compose: bool,
 }
 
 impl Project {
@@ -473,8 +477,9 @@ impl Project {
             .clone();
         let (effects, undrawn) = self.effects(image, textures, remaining, still)?;
         let image = image.clone();
-        // A plain colour is as big as the layer says, which effects drawn over it need.
-        let texture = match (resolved.solid, image.size) {
+        // A plain colour or a composition layer is as big as the layer says, which effects
+        // drawn over it need.
+        let texture = match (resolved.solid || resolved.compose, image.size) {
             (true, Some((width, height))) => {
                 Arc::new(Texture::solid(width.round() as u32, height.round() as u32))
             }
@@ -492,6 +497,7 @@ impl Project {
             effects,
             undrawn,
             sprite: resolved.sprite,
+            compose: resolved.compose,
             particles: None,
             text: None,
         })
@@ -528,7 +534,7 @@ impl Project {
                 });
             }
         }
-        let texture = if material.solid {
+        let texture = if material.solid || material.compose {
             Arc::new(Texture::solid(1, 1))
         } else {
             decoded.remove(0).texture
@@ -547,6 +553,7 @@ impl Project {
             shade,
             solid: material.solid,
             sprite: material.sprite,
+            compose: material.compose,
         })
     }
 }

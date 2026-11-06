@@ -38,6 +38,7 @@ fn placed(
         posed: layer.image.pose(),
         words: None,
         sprite: None,
+        compose: layer.compose,
     };
     drawn.pose(&layer.image.pose());
     drawn
@@ -139,12 +140,17 @@ impl<'a> Builder<'a> {
         } else {
             None
         };
-        // A sprite sheet's picture is one of its frames.
-        let picture = layer
-            .texture
-            .frame_size()
-            .filter(|_| layer.sprite)
-            .unwrap_or((layer.texture.image_width, layer.texture.image_height));
+        // A sprite sheet's picture is one of its frames; a composition layer over the whole
+        // scene is the scene's size.
+        let picture = if layer.compose && layer.fullscreen {
+            (scene.size.0.round() as u32, scene.size.1.round() as u32)
+        } else {
+            layer
+                .texture
+                .frame_size()
+                .filter(|_| layer.sprite)
+                .unwrap_or((layer.texture.image_width, layer.texture.image_height))
+        };
         let own = Step {
             program,
             uv_max: self.textures[&Arc::as_ptr(&layer.texture)].1,
@@ -153,8 +159,11 @@ impl<'a> Builder<'a> {
             inputs,
             constants,
         };
-        // A layer whose picture others' effects read is drawn into a target of its own too.
-        let (step, chain) = if layer.effects.is_empty() && !self.composited.contains(&layer.object)
+        // A layer whose picture others' effects read, or that composes what's under it, is
+        // drawn into a target of its own too.
+        let (step, chain) = if layer.effects.is_empty()
+            && !self.composited.contains(&layer.object)
+            && !layer.compose
         {
             (own, None)
         } else {
@@ -306,7 +315,7 @@ impl<'a> Builder<'a> {
         }
         // Effects that read where the layer is on screen draw again as it moves, and those
         // that read other layers' pictures as those change.
-        let reads_others = passes.iter().any(|pass| !pass.composites.is_empty());
+        let reads_others = layer.compose || passes.iter().any(|pass| !pass.composites.is_empty());
         let animated = reads_others
             || steps.iter().any(|step| {
                 let program = &renderer.programs[step.program];

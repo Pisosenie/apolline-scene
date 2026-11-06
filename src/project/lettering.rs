@@ -57,6 +57,7 @@ impl Project {
             effects,
             undrawn,
             sprite: false,
+            compose: false,
             particles: None,
             text: Some(Arc::new(lettering)),
         })

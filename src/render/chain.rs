@@ -53,6 +53,9 @@ pub(super) struct Moment {
     pub time: f32,
     pub delta: f32,
     pub placed: super::Affine,
+    /// For a composition layer, the frame drawn so far and where in it the layer's picture
+    /// is, which its own step reads in place of its texture.
+    pub own: Option<(glow::Texture, [f32; 6])>,
 }
 
 /// Draws a whole target, with its top row first like an uploaded texture's.
@@ -203,7 +206,14 @@ impl Chain {
             time,
             delta,
             placed,
+            own,
         } = at;
+        let composed = own.map(|(frame, place)| {
+            let mut step = self.steps[0].clone();
+            step.inputs[0].texture = frame;
+            step.sheet = Some(place);
+            step
+        });
         if self.drawn.get() == Some(screen) && !self.animated {
             return;
         }
@@ -219,6 +229,10 @@ impl Chain {
                 if !self.shown[at] {
                     continue;
                 }
+                let step = match (&composed, at) {
+                    (Some(composed), 0) => composed,
+                    _ => step,
+                };
                 let pass = at.checked_sub(1).map(|at| &self.passes[at]);
                 let (target, size) = match pass.and_then(|pass| pass.target) {
                     Some(buffer) => (

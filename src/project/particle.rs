@@ -140,6 +140,7 @@ impl Project {
             effects: Vec::new(),
             undrawn: Vec::new(),
             sprite: false,
+            compose: false,
             particles: Some(Arc::new(system)),
             text: None,
         })
