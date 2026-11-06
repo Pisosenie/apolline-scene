@@ -416,7 +416,9 @@ fn constant(kind: &str, value: &Value) -> Result<Constant, Error> {
             })
             .collect::<Result<_, _>>()?
     } else if let Some(text) = value.as_str() {
-        text.split_whitespace()
+        // Components apart by spaces, or commas as some workshop shaders write them.
+        text.split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|word| !word.is_empty())
             .take(count + 1)
             .map(|word| word.parse().map_err(|_| fail("invalid numeric component")))
             .collect::<Result<_, _>>()?
