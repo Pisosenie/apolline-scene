@@ -191,7 +191,7 @@ impl Project {
                 sprite,
             });
         }
-        let fragment = self.custom(shader, &combos, &constants, &mut names, false, resources)?;
+        let fragment = self.custom(shader, &combos, &constants, &mut names, None, resources)?;
         Ok(Material {
             names,
             fragment: Some(fragment),
@@ -202,15 +202,15 @@ impl Project {
         })
     }
 
-    /// A custom shader's program for one pass. A `chained` pass is an effect's, whose slot 0
-    /// is the layer's picture so far rather than a texture.
+    /// A custom shader's program for one pass. An effect's pass has slots the chain `provides`
+    /// rather than textures: the layer's picture so far, or one of its effect's buffers.
     pub(super) fn custom(
         &self,
         shader: &str,
         combos: &serde_json::Map<String, Value>,
         constants: &serde_json::Map<String, Value>,
         names: &mut Vec<Option<String>>,
-        chained: bool,
+        provides: Option<u8>,
         resources: &mut Resources,
     ) -> Result<Arc<Fragment>, Error> {
         if resources.custom_materials >= 256 {
@@ -247,15 +247,19 @@ impl Project {
             None => None,
         };
         let template = Template::load(&entry, load)?;
-        if chained && names.is_empty() {
-            names.push(None);
+        if let Some(provides) = provides {
+            let highest = 8 - provides.leading_zeros() as usize;
+            if names.len() < highest {
+                names.resize(highest, None);
+            }
         }
         template.fill_defaults(names, combos)?;
-        let mask = if chained {
-            names[0] = None;
-            let mut mask = 1;
-            for (slot, name) in names.iter().enumerate().skip(1) {
-                if let Some(name) = name {
+        let mask = if let Some(provides) = provides {
+            let mut mask = provides;
+            for (slot, name) in names.iter_mut().enumerate() {
+                if provides & (1 << slot) != 0 {
+                    *name = None;
+                } else if let Some(name) = name {
                     texture_file(name)?;
                     mask |= 1 << slot;
                 }
@@ -266,6 +270,11 @@ impl Project {
         };
         let fragment = template.prepare(combos, constants, Some(mask), vertex)?;
         fragment.validate_inputs(mask)?;
+        if fragment.unplaced && provides.is_none() {
+            return Err(Error::Format(
+                "a vertex shader that places a_Position without the matrix".into(),
+            ));
+        }
         let bytes = fragment.source.len() + fragment.vertex.as_ref().map_or(0, String::len);
         if bytes > (16 * 1024 * 1024usize).saturating_sub(resources.source_bytes) {
             return Err(Error::Format("scene shader sources exceed 16 MiB".into()));

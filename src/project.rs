@@ -7,7 +7,7 @@ mod lettering;
 mod material;
 mod particle;
 
-pub use effect::EffectPass;
+pub use effect::{Buffer, EffectPass, Source};
 
 use std::borrow::Cow;
 use std::collections::HashMap;

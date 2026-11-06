@@ -231,7 +231,8 @@ pub(super) fn bind(
                             )));
                         }
                         replacements.push((token.start, declaration[3].end, String::new()));
-                    } else {
+                    } else if tokens.iter().filter(|token| token.text == name).count() > 1 {
+                        // Only a slot something reads needs binding, not one just declared.
                         inputs |= 1 << index;
                     }
                     continue;

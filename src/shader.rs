@@ -34,6 +34,10 @@ pub struct Fragment {
     pub(crate) vertex: Option<String>,
     /// What it reads from the engine beyond time.
     pub reads: Reads,
+    /// Its vertex shader takes `a_Position` as already where it goes on the target, as
+    /// Wallpaper Engine draws passes into an effect's buffers, rather than placing it through
+    /// the matrix.
+    pub(crate) unplaced: bool,
     bindings: Option<u8>,
     pub(crate) files: Vec<String>,
 }
@@ -190,6 +194,7 @@ impl Template {
                 .count()
                 > 1
         };
+        let mut unplaced = false;
         let vertex = match vertex {
             Some(vertex) => {
                 // Both stages see the same combos: the fragment's, as the material and its
@@ -205,11 +210,10 @@ impl Template {
                 let mut stage = parameters::bind(&selected, constants, missing, Stage::Vertex)?;
                 let tokens = parameters::tokens(&selected)?;
                 let named = |name: &str| tokens.iter().any(|token| token.text == name);
-                if named("a_Position") && !named("g_ModelViewProjectionMatrix") {
-                    return Err(fail(
-                        "a vertex shader that places a_Position without the matrix",
-                    ));
-                }
+                // The matrix counts when it's used, not just declared.
+                let used =
+                    |name: &str| tokens.iter().filter(|token| token.text == name).count() > 1;
+                unplaced = named("a_Position") && !used("g_ModelViewProjectionMatrix");
                 for varying in &bound.varyings {
                     let written = stage.varyings.iter().find(|(name, _)| *name == varying.0);
                     if written.is_some_and(|written| written.1 != varying.1)
@@ -274,6 +278,7 @@ impl Template {
             animated: bound.animated,
             constants: bound.constants,
             keys: bound.keys,
+            unplaced,
             bindings,
             files,
         })
@@ -641,12 +646,15 @@ mod tests {
     }
 
     #[test]
-    fn all_declared_sampler_and_resolution_slots_must_be_bound() {
-        let fragment = prepare("uniform sampler2D g_Texture0;\nuniform sampler2D g_Texture1;\nuniform vec4 g_Texture7Resolution;\nvoid main() { gl_FragColor = vec4(1.0); }", json!({}), json!({})).unwrap();
+    fn every_sampler_and_resolution_slot_read_must_be_bound() {
+        let fragment = prepare("uniform sampler2D g_Texture0;\nuniform sampler2D g_Texture1;\nuniform vec4 g_Texture7Resolution;\nvoid main() { gl_FragColor = texture2D(g_Texture1, vec2(0.0)) + g_Texture7Resolution; }", json!({}), json!({})).unwrap();
         assert!(fragment.validate_inputs(1).is_err());
         assert!(fragment.validate_inputs(127).is_err());
         assert!(fragment.validate_inputs(255).is_ok());
         assert!(fragment.validate_inputs(0).is_err());
+        // Slots only declared, as stock shaders often leave them, need nothing bound.
+        let declared = prepare("uniform sampler2D g_Texture0;\nuniform sampler2D g_Texture1;\nuniform vec4 g_Texture7Resolution;\nvoid main() { gl_FragColor = vec4(1.0); }", json!({}), json!({})).unwrap();
+        assert!(declared.validate_inputs(1).is_ok());
     }
 
     #[test]

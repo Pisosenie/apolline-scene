@@ -490,7 +490,7 @@ impl Renderer {
                     &affine,
                     size,
                     layer.tint,
-                    None,
+                    &[],
                 );
                 match &layer.swarm {
                     Some(swarm) => {
@@ -578,7 +578,7 @@ unsafe fn bind(
     placed: &Affine,
     size: (f32, f32),
     tint: [f32; 4],
-    before: Option<&Input>,
+    before: &[Input],
 ) {
     unsafe {
         if program.unproject.is_some() {
@@ -616,7 +616,7 @@ unsafe fn bind(
         for (location, value) in &step.constants {
             material::set(gl, location.as_ref(), value);
         }
-        for input in before.into_iter().chain(&step.inputs) {
+        for input in before.iter().chain(&step.inputs) {
             gl.active_texture(glow::TEXTURE0 + u32::from(input.slot));
             gl.bind_sampler(u32::from(input.slot), None);
             gl.bind_texture(glow::TEXTURE_2D, Some(input.texture));

@@ -142,7 +142,7 @@ fn a_hidden_effect_that_cant_be_drawn_fails_only_the_scripts_that_show_it() {
         let folder = scene(&format!("effects-undrawn-{at}"), &effects(script));
         std::fs::write(
             folder.join("effects/copy/effect.json"),
-            r#"{"passes":[{"material":"materials/effects/copy.json"}],"fbos":[{"name":"half"}]}"#,
+            r#"{"passes":[{"material":"materials/effects/copy.json"}],"fbos":[{"name":"half","format":"r8"}]}"#,
         )
         .unwrap();
         let project = Project::open(&folder, None).unwrap();
@@ -150,7 +150,8 @@ fn a_hidden_effect_that_cant_be_drawn_fails_only_the_scripts_that_show_it() {
             let refused = refusal(&folder);
             assert!(
                 refused.contains("effects[0].visible")
-                    && refused.contains("can't be drawn: effect copy: unsupported field fbos"),
+                    && refused
+                        .contains("can't be drawn: effect copy: effect buffers of other formats"),
                 "{refused}"
             );
         } else {
@@ -228,12 +229,12 @@ fn what_effects_do_that_isnt_drawn_is_refused_by_name() {
         (
             r#"[{"file":"effects/copy/effect.json"}]"#,
             "fbos",
-            "effect copy: unsupported field fbos",
+            "effect copy: effect buffers of other formats",
         ),
         (
             r#"[{"file":"effects/copy/effect.json"}]"#,
             "target",
-            "unsupported field target",
+            "half, which isn't one of its buffers",
         ),
         (
             r#"[{"file":"effects/copy/effect.json"}]"#,
@@ -252,7 +253,7 @@ fn what_effects_do_that_isnt_drawn_is_refused_by_name() {
         match change {
             "fbos" => write(
                 "effects/copy/effect.json",
-                r#"{"passes":[{"material":"materials/effects/copy.json"}],"fbos":[{"name":"half"}]}"#,
+                r#"{"passes":[{"material":"materials/effects/copy.json"}],"fbos":[{"name":"half","format":"r8"}]}"#,
             ),
             "target" => write(
                 "effects/copy/effect.json",

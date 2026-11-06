@@ -235,11 +235,26 @@ impl<'a> Builder<'a> {
     ) -> Result<(Step, Option<Chain>), Error> {
         let mut steps = vec![own];
         let mut passes = Vec::with_capacity(layer.effects.len());
+        // Each effect's buffers, by the effect and their place among its own.
+        let mut buffers: Vec<(usize, usize, u32)> = Vec::new();
+        let mut buffer = |effect: usize, wanted: crate::project::Buffer| {
+            let found = buffers
+                .iter()
+                .position(|&(owner, at, _)| owner == effect && at == wanted.at);
+            found.unwrap_or_else(|| {
+                buffers.push((effect, wanted.at, wanted.scale));
+                buffers.len() - 1
+            })
+        };
         for pass in &layer.effects {
-            let mut bindings = 1u8;
+            let provided = pass
+                .reads
+                .iter()
+                .fold(0u8, |mask, (slot, _)| mask | 1 << slot);
+            let mut bindings = provided | 1;
             let mut inputs = Vec::with_capacity(pass.inputs.len());
             for input in &pass.inputs {
-                if input.slot == 0 || input.slot >= 8 || bindings & (1 << input.slot) != 0 {
+                if input.slot >= 8 || bindings & (1 << input.slot) != 0 {
                     return Err(Error::Format("invalid effect texture slot".into()));
                 }
                 bindings |= 1 << input.slot;
@@ -255,11 +270,23 @@ impl<'a> Builder<'a> {
                 sheet: None,
                 constants,
             });
+            let reads = pass
+                .reads
+                .iter()
+                .map(|&(slot, source)| match source {
+                    crate::project::Source::Previous => (slot, None),
+                    crate::project::Source::Buffer(wanted) => {
+                        (slot, Some(buffer(pass.effect, wanted)))
+                    }
+                })
+                .collect();
             passes.push(Pass {
                 effect: pass.effect,
                 pass: pass.pass,
                 visible: pass.visible,
                 keys: pass.fragment.keys.clone(),
+                target: pass.target.map(|wanted| buffer(pass.effect, wanted)),
+                reads,
             });
         }
         // Effects that read where the layer is on screen draw again as it moves.
@@ -272,11 +299,15 @@ impl<'a> Builder<'a> {
                 || program.unproject.is_some()
                 || program.unproject_picture.is_some()
         });
-        reserve(
-            &mut self.allocated,
-            2 * 4 * size.0 as usize * size.1 as usize,
-        )?;
-        let chain = unsafe { Chain::new(self.gl, size, steps, passes, animated)? };
+        let scales: Vec<u32> = buffers.iter().map(|&(_, _, scale)| scale).collect();
+        let pixels = |(width, height): (u32, u32)| 4 * width as usize * height as usize;
+        let bytes = 2 * pixels(size)
+            + scales
+                .iter()
+                .map(|&scale| pixels(super::chain::shrunk(size, scale)))
+                .sum::<usize>();
+        reserve(&mut self.allocated, bytes)?;
+        let chain = unsafe { Chain::new(self.gl, size, steps, passes, &scales, animated)? };
         let (width, height) = (size.0 as f32, size.1 as f32);
         let place = Step {
             program: 0,

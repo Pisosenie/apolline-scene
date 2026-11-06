@@ -1,12 +1,15 @@
 //! Effects on a layer. Each instance names an `effect.json`, whose passes name materials, and
-//! its own passes override their combos, values and textures. Every pass draws over the
-//! layer's picture so far, which it reads in texture slot 0. Scripts may show and hide effects
-//! and change their values as the scene runs. What isn't understood — render targets, passes
-//! that blend, animated values — is refused by name.
+//! its own passes override their combos, values and textures. A pass draws over the layer's
+//! picture so far, which it reads in texture slot 0, or into one of the effect's buffers
+//! (`fbos`, a half or a quarter the picture's size, say), reading the picture and the buffers
+//! in the slots its `bind` says. Scripts may show and hide effects and change their values as
+//! the scene runs. What isn't understood — copies, passes that blend, buffers of other
+//! formats — is refused by name.
 
 use super::material::{Resources, names, object};
 use super::*;
 use crate::shader::Fragment;
+use crate::value::number;
 
 /// One pass of an effect, drawn over the layer's picture so far.
 #[derive(Clone)]
@@ -20,6 +23,26 @@ pub struct EffectPass {
     pub pass: usize,
     /// Whether its effect is shown at first.
     pub visible: bool,
+    /// The effect's buffer it draws into; none for the layer's picture.
+    pub target: Option<Buffer>,
+    /// What it reads besides its textures, by slot.
+    pub reads: Vec<(u8, Source)>,
+}
+
+/// One of an effect's buffers: its place among them, and how many times smaller than the
+/// layer's picture it is each way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Buffer {
+    pub at: usize,
+    pub scale: u32,
+}
+
+/// What an effect pass reads: the layer's picture before the pass, or one of its effect's
+/// buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Previous,
+    Buffer(Buffer),
 }
 
 /// The most passes a layer's effects may have.
@@ -33,15 +56,18 @@ const DEFINITION: &[&str] = &[
     "dependencies",
     "description",
     "editable",
+    "fbos",
     "gizmos",
     "group",
     "name",
     "passes",
+    "performance",
     "preview",
     "replacementkey",
     "version",
 ];
-const STEP: &[&str] = &["material"];
+const STEP: &[&str] = &["bind", "material", "target"];
+const FBO: &[&str] = &["format", "name", "scale"];
 const OVERRIDE: &[&str] = &["combos", "constantshadervalues", "id", "textures"];
 const PASS: &[&str] = &[
     "alphawriting",
@@ -158,6 +184,7 @@ impl Project {
             .and_then(Value::as_array)
             .filter(|steps| !steps.is_empty() && steps.len() <= 8)
             .ok_or_else(|| Error::Format("effect.json needs one to eight passes".into()))?;
+        let buffers = buffers(&definition)?;
         let overrides = match instance.get("passes") {
             None => &[][..],
             Some(Value::Array(overrides)) if overrides.len() <= steps.len() => overrides,
@@ -173,7 +200,60 @@ impl Project {
             if let Some(over) = over {
                 known(over, OVERRIDE)?;
             }
-            passes.push(self.effect_pass(material, over, resources, remaining, still)?);
+            let buffer = |name: &str| {
+                buffers
+                    .iter()
+                    .position(|(named, _)| named == name)
+                    .map(|at| Buffer {
+                        at,
+                        scale: buffers[at].1,
+                    })
+                    .ok_or_else(|| {
+                        Error::Format(format!(
+                            "a pass reads or draws {}, which isn't one of its buffers",
+                            name.chars().take(64).collect::<String>()
+                        ))
+                    })
+            };
+            let target = text(step.get("target")).map(buffer).transpose()?;
+            let mut reads = Vec::new();
+            for bound in step
+                .get("bind")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let slot = number(bound.get("index"))
+                    .filter(|slot| (0.0..8.0).contains(slot) && slot.fract() == 0.0)
+                    .ok_or_else(|| Error::Format("a pass binds outside slots 0 to 7".into()))?
+                    as u8;
+                let source = match text(bound.get("name")) {
+                    Some("previous") => Source::Previous,
+                    Some(name) => Source::Buffer(buffer(name)?),
+                    None => return Err(Error::Format("a pass binds nothing by name".into())),
+                };
+                if reads.iter().any(|(taken, _)| *taken == slot) {
+                    return Err(Error::Format("a pass binds one slot twice".into()));
+                }
+                reads.push((slot, source));
+            }
+            // Slot 0 is the picture so far unless a bind says otherwise.
+            if !reads.iter().any(|(slot, _)| *slot == 0) {
+                reads.push((0, Source::Previous));
+            }
+            let provides = reads.iter().fold(0u8, |mask, (slot, _)| mask | 1 << slot);
+            let pass = self.effect_pass(material, over, provides, resources, remaining, still)?;
+            // Only a pass into a buffer is drawn as a quad already in place.
+            if pass.fragment.unplaced && target.is_none() {
+                return Err(Error::Format(
+                    "a vertex shader that places a_Position without the matrix".into(),
+                ));
+            }
+            passes.push(EffectPass {
+                target,
+                reads,
+                ..pass
+            });
         }
         Ok(())
     }
@@ -182,6 +262,7 @@ impl Project {
         &self,
         material: &str,
         over: Option<&Value>,
+        provides: u8,
         resources: &mut Resources,
         remaining: &mut usize,
         still: bool,
@@ -240,6 +321,11 @@ impl Project {
                             "an effect binds a texture over the layer's picture".into(),
                         ));
                     }
+                    if provides & (1 << slot) != 0 {
+                        return Err(Error::Format(
+                            "an effect binds a texture where its pass reads a buffer".into(),
+                        ));
+                    }
                     if textures.len() <= slot {
                         textures.resize(slot + 1, None);
                     }
@@ -259,7 +345,14 @@ impl Project {
                 "animated effect values need another renderer".into(),
             ));
         }
-        let fragment = self.custom(shader, &combos, &constants, &mut textures, true, resources)?;
+        let fragment = self.custom(
+            shader,
+            &combos,
+            &constants,
+            &mut textures,
+            Some(provides),
+            resources,
+        )?;
         let mut inputs = Vec::new();
         for (slot, name) in textures.iter().enumerate().skip(1) {
             if let Some(name) = name {
@@ -275,8 +368,40 @@ impl Project {
             effect: 0,
             pass: 0,
             visible: true,
+            target: None,
+            reads: Vec::new(),
         })
     }
+}
+
+/// An effect's buffers, by name, and how many times smaller than the picture each is.
+fn buffers(definition: &Value) -> Result<Vec<(String, u32)>, Error> {
+    let mut found = Vec::new();
+    for fbo in definition
+        .get("fbos")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        known(fbo, FBO)?;
+        if !matches!(
+            text(fbo.get("format")),
+            None | Some("rgba_backbuffer" | "rgba8888")
+        ) {
+            return Err(Error::Format("effect buffers of other formats".into()));
+        }
+        let scale = number(fbo.get("scale"))
+            .unwrap_or(1.0)
+            .clamp(1.0, 16.0)
+            .round() as u32;
+        let name = text(fbo.get("name"))
+            .ok_or_else(|| Error::Format("an effect buffer without a name".into()))?;
+        found.push((name.to_owned(), scale));
+        if found.len() > 8 {
+            return Err(Error::Format("an effect with more than 8 buffers".into()));
+        }
+    }
+    Ok(found)
 }
 
 /// Refuses a key that isn't among those understood.

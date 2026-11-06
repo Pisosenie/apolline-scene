@@ -1,7 +1,9 @@
 //! A layer with effects is drawn into a texture of its own size first: its own material, then
 //! each effect pass over the result of the one before, back and forth between two targets.
-//! The scene then places the last result like a plain layer. A chain nothing animates is
-//! drawn once, and again when scripts show or hide its effects or change their values.
+//! A pass may draw into one of its effect's buffers instead, at a size of their own, and read
+//! the picture before it and the buffers in whichever slots it binds them to. The scene then
+//! places the last result like a plain layer. A chain nothing animates is drawn once, and
+//! again when scripts show or hide its effects or change their values.
 
 use std::cell::Cell;
 
@@ -13,6 +15,8 @@ use crate::Error;
 
 pub(super) struct Chain {
     targets: [Target; 2],
+    /// The effects' buffers, each with how many times smaller than the picture it is.
+    buffers: Vec<(u32, Target)>,
     size: (u32, u32),
     steps: Vec<Step>,
     /// What each step after the layer's own draws, and whether each step is drawn.
@@ -30,6 +34,10 @@ pub(super) struct Pass {
     pub pass: usize,
     pub visible: bool,
     pub keys: Vec<Option<String>>,
+    /// The buffer it draws into, by place among the chain's; none for the picture.
+    pub target: Option<usize>,
+    /// What it reads, by slot: a buffer, or none for the picture before it.
+    pub reads: Vec<(u8, Option<usize>)>,
 }
 
 /// What a run of the chain is drawn for: the screen, the time, and where the layer is on the
@@ -56,22 +64,33 @@ impl Chain {
         size: (u32, u32),
         steps: Vec<Step>,
         passes: Vec<Pass>,
+        scales: &[u32],
         animated: bool,
     ) -> Result<Self, Error> {
         let shown = std::iter::once(true)
             .chain(passes.iter().map(|pass| pass.visible))
             .collect();
         unsafe {
-            let first = Target::new(gl, size)?;
-            let second = match Target::new(gl, size) {
-                Ok(second) => second,
-                Err(error) => {
-                    first.delete(gl);
-                    return Err(error);
+            let mut made: Vec<Target> = Vec::new();
+            let sizes = [size, size]
+                .into_iter()
+                .chain(scales.iter().map(|&scale| shrunk(size, scale)));
+            for wanted in sizes {
+                match Target::new(gl, wanted) {
+                    Ok(target) => made.push(target),
+                    Err(error) => {
+                        for target in &made {
+                            target.delete(gl);
+                        }
+                        return Err(error);
+                    }
                 }
-            };
+            }
+            let mut made = made.into_iter();
+            let targets = [made.next(), made.next()].map(|target| target.expect("two made"));
             Ok(Chain {
-                targets: [first, second],
+                targets,
+                buffers: scales.iter().copied().zip(made).collect(),
                 size,
                 steps,
                 passes,
@@ -101,14 +120,23 @@ impl Chain {
             for target in &self.targets {
                 unsafe { target.resize(gl, size) };
             }
+            for (scale, buffer) in &self.buffers {
+                unsafe { buffer.resize(gl, shrunk(size, *scale)) };
+            }
             self.size = size;
         }
         self.drawn.set(None);
     }
 
-    /// The texture the last step drawn draws into, which holds the layer's finished picture.
+    /// The texture the last step drawn into the picture draws into, which holds the layer's
+    /// finished picture.
     pub fn result(&self) -> glow::Texture {
-        let drawn = self.shown.iter().filter(|&&shown| shown).count();
+        let drawn = self
+            .shown
+            .iter()
+            .enumerate()
+            .filter(|&(at, &shown)| shown && (at == 0 || self.passes[at - 1].target.is_none()))
+            .count();
         self.targets[(drawn - 1) % 2].texture
     }
 
@@ -168,44 +196,66 @@ impl Chain {
         if self.drawn.get() == Some(screen) && !self.animated {
             return;
         }
-        let (width, height) = self.size;
-        let whole = (width as f32, height as f32);
-        let resolution = [whole.0, whole.1, whole.0, whole.1];
+        let resolution = |(width, height): (u32, u32)| {
+            let (width, height) = (width as f32, height as f32);
+            [width, height, width, height]
+        };
         unsafe {
             gl.disable(glow::BLEND);
-            gl.viewport(0, 0, width as i32, height as i32);
-            let shown = self
-                .steps
-                .iter()
-                .zip(&self.shown)
-                .filter(|(_, shown)| **shown);
-            for (at, (step, _)) in shown.enumerate() {
-                let target = &self.targets[at % 2];
+            // How many steps have drawn into the picture so far.
+            let mut drawn = 0;
+            for (at, step) in self.steps.iter().enumerate() {
+                if !self.shown[at] {
+                    continue;
+                }
+                let pass = at.checked_sub(1).map(|at| &self.passes[at]);
+                let (target, size) = match pass.and_then(|pass| pass.target) {
+                    Some(buffer) => (
+                        &self.buffers[buffer].1,
+                        shrunk(self.size, self.buffers[buffer].0),
+                    ),
+                    None => (&self.targets[drawn % 2], self.size),
+                };
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
+                gl.viewport(0, 0, size.0 as i32, size.1 as i32);
                 gl.clear_color(0.0, 0.0, 0.0, 0.0);
                 gl.clear(glow::COLOR_BUFFER_BIT);
                 let program = &programs[step.program];
                 gl.use_program(Some(program.id));
                 gl.bind_vertex_array(Some(program.vao));
                 if let Some(frame) = &program.frame {
-                    frame.update(gl, screen, self.size, time, delta, inputs);
+                    frame.update(gl, screen, size, time, delta, inputs);
                 }
-                let before = (at > 0).then(|| Input {
-                    slot: 0,
-                    texture: self.targets[(at - 1) % 2].texture,
-                    resolution,
-                });
-                super::bind(
-                    gl,
-                    program,
-                    step,
-                    &WHOLE,
-                    &placed,
-                    whole,
-                    [1.0; 4],
-                    before.as_ref(),
-                );
+                let reads: Vec<Input> = pass
+                    .into_iter()
+                    .flat_map(|pass| &pass.reads)
+                    .map(|&(slot, read)| match read {
+                        Some(buffer) => {
+                            let (scale, buffer) = &self.buffers[buffer];
+                            Input {
+                                slot,
+                                texture: buffer.texture,
+                                resolution: resolution(shrunk(self.size, *scale)),
+                            }
+                        }
+                        None => Input {
+                            slot,
+                            texture: self.targets[(drawn + 1) % 2].texture,
+                            resolution: resolution(self.size),
+                        },
+                    })
+                    .collect();
+                // A pass into a buffer gets its quad already in place, flipped like the rest, so
+                // its matrix comes out the identity; one into the picture, in its pixels.
+                let units = match pass.and_then(|pass| pass.target) {
+                    Some(_) => (2.0, -2.0),
+                    None => (size.0 as f32, size.1 as f32),
+                };
+                super::bind(gl, program, step, &WHOLE, &placed, units, [1.0; 4], &reads);
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                if pass.is_none_or(|pass| pass.target.is_none()) {
+                    drawn += 1;
+                }
             }
         }
         self.drawn.set(Some(screen));
@@ -215,9 +265,19 @@ impl Chain {
     /// The GL context must be current on this thread.
     pub unsafe fn delete(&self, gl: &glow::Context) {
         unsafe {
-            for target in &self.targets {
+            for target in self
+                .targets
+                .iter()
+                .chain(self.buffers.iter().map(|(_, buffer)| buffer))
+            {
                 target.delete(gl);
             }
         }
     }
+}
+
+/// A picture's size `scale` times smaller each way, at least a pixel.
+pub(super) fn shrunk(size: (u32, u32), scale: u32) -> (u32, u32) {
+    let scale = scale.max(1);
+    (size.0.div_ceil(scale).max(1), size.1.div_ceil(scale).max(1))
 }

@@ -18,6 +18,7 @@ demos.add_argument("--effect-script-demo", action="store_true", help="the effect
 demos.add_argument("--animation-demo", action="store_true", help="the effect demo with the brick misplaced, the glow dimmed and the tint black, which timelines put right by the first second")
 demos.add_argument("--sprite-demo", action="store_true", help="make the sun a sprite sheet of junk, the sun turned in the sheet and the sun, which shows from 1 s")
 demos.add_argument("--pointer-demo", action="store_true", help="an effect on the turned sun that finds where the pointer, at rest mid-screen, is on the sun's picture, and turns it red unless that's where it is")
+demos.add_argument("--buffer-demo", action="store_true", help="an effect on the sun that copies it into a half-size buffer and checks the copy against the sun, turning it red where they differ")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -288,6 +289,31 @@ void main() {{
     gl_FragColor = right ? texSample2D(g_Texture0, v_TexCoord) : vec4(1.0, 0.0, 0.0, 1.0);
 }}
 """).encode()
+if args.buffer_demo:
+    # Two passes: the first draws the sun into a buffer half its size, the second reads that
+    # in slot 0 and the sun before the effect in slot 2, and keeps the sun only where the
+    # copy is the same picture the same way up.
+    scene = json.loads(files["scene.json"])
+    scene["objects"][1]["effects"] = [{"file": "effects/halved/effect.json"}]
+    files["scene.json"] = json.dumps(scene).encode()
+    files["effects/halved/effect.json"] = json.dumps({"name": "halved", "passes": [
+        {"material": "materials/effects/keep.json", "target": "_rt_HalfCompoBuffer1", "bind": [{"name": "previous", "index": 0}]},
+        {"material": "materials/effects/compare.json", "bind": [{"name": "_rt_HalfCompoBuffer1", "index": 0}, {"name": "previous", "index": 2}]}],
+        "fbos": [{"name": "_rt_HalfCompoBuffer1", "scale": 2, "format": "rgba_backbuffer"}]}).encode()
+    files["materials/effects/keep.json"] = b'{"passes": [{"shader": "effects/keep", "textures": [null]}]}'
+    # Drawn into the buffer as Wallpaper Engine draws such passes: the quad already in place.
+    files["shaders/effects/keep.vert"] = b"attribute vec3 a_Position;\nattribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }\n"
+    files["shaders/effects/keep.frag"] = b"varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }\n"
+    files["materials/effects/compare.json"] = b'{"passes": [{"shader": "effects/compare", "textures": [null]}]}'
+    files["shaders/effects/compare.frag"] = b"""varying vec2 v_TexCoord;
+uniform sampler2D g_Texture0;
+uniform sampler2D g_Texture2;
+void main() {
+    vec4 copy = texSample2D(g_Texture0, v_TexCoord);
+    vec4 sun = texSample2D(g_Texture2, v_TexCoord);
+    gl_FragColor = distance(copy, sun) < 0.25 ? sun : vec4(1.0, 0.0, 0.0, 1.0);
+}
+"""
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'
