@@ -264,7 +264,10 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             note(Missing::UnknownKey(format!("general.{key}")));
         }
         let field = |name: &str| general.get(name);
-        if flag(field("hdr")) == Some(true) {
+        // Without its bloom, HDR keeps only what's brighter than white until the end, where
+        // it's cut to white: the same as cutting it each time, but where a translucent layer
+        // then covers it. Its own bloom, from a chain of smaller pictures, isn't drawn.
+        if flag(field("hdr")) == Some(true) && flag(field("bloom")) == Some(true) {
             note(Missing::Setting("HDR rendering"));
         }
         if flag(field("windenabled")) == Some(true) {
@@ -598,7 +601,8 @@ mod tests {
         let scene = json!({
             "camera": {}, "version": 3,
             "general": {"clearcolor": "0 0 0", "orthogonalprojection": {"width": 10, "height": 10},
-                        "bloom": false, "camerashake": false, "zoom": 1, "ambientcolor": "0.3 0.3 0.3"},
+                        "bloom": false, "hdr": true, "camerashake": false, "zoom": 1,
+                        "ambientcolor": "0.3 0.3 0.3"},
             "objects": [{"id": 1, "name": "sky", "image": "models/sky.json", "origin": "5 5 0",
                          "alignment": "center", "colorBlendMode": 0, "copybackground": false,
                          "visible": {"user": "show", "value": true}}]
@@ -609,7 +613,7 @@ mod tests {
     #[test]
     fn what_isnt_understood_is_named() {
         let scene = json!({
-            "general": {"bloom": true, "mystery": 1, "zoom": 20},
+            "general": {"bloom": true, "hdr": true, "mystery": 1, "zoom": 20},
             "objects": [{"image": "a.json", "wobble": 3, "colorBlendMode": 33,
                          "origin": {"value": "0 0 0", "animation": {"frames": []}}}]
         });
@@ -619,6 +623,7 @@ mod tests {
             Missing::Setting("camera zoom"),
             Missing::UnknownKey("objects[0].wobble".into()),
             Missing::Setting("colour blend modes"),
+            Missing::Setting("HDR rendering"),
             Missing::Animated("objects[0].origin".into()),
         ] {
             assert!(found.contains(&missing), "{missing} not in {found:?}");

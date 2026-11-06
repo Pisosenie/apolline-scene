@@ -363,6 +363,7 @@ impl<'a> Builder<'a> {
                 target: pass.target.map(|wanted| buffer(pass.effect, wanted)),
                 reads,
                 composites,
+                unplaced: pass.fragment.unplaced,
             });
         }
         // Effects that read where the layer is on screen draw again as it moves, and those

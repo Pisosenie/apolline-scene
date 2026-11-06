@@ -68,7 +68,7 @@ const DEFINITION: &[&str] = &[
     "replacementkey",
     "version",
 ];
-const STEP: &[&str] = &["bind", "material", "target"];
+const STEP: &[&str] = &["bind", "compose", "material", "target"];
 const FBO: &[&str] = &["format", "name", "scale"];
 const OVERRIDE: &[&str] = &["combos", "constantshadervalues", "id", "textures"];
 const PASS: &[&str] = &[
@@ -197,6 +197,15 @@ impl Project {
         };
         for (at, step) in steps.iter().enumerate() {
             known(step, STEP)?;
+            // An older way to draw a pass into a picture of its own for the next to read, as
+            // each pass here is; the next reading anything else besides is refused there.
+            if step
+                .get("compose")
+                .is_some_and(|compose| compose != &Value::Bool(false))
+                && (step.get("compose") != Some(&Value::Bool(true)) || at + 1 == steps.len())
+            {
+                return Err(Error::Format("a composed pass nothing reads".into()));
+            }
             let material = text(step.get("material"))
                 .ok_or_else(|| Error::Format("an effect pass names no material".into()))?;
             let over = overrides.get(at);
@@ -246,12 +255,6 @@ impl Project {
             }
             let provides = reads.iter().fold(0u8, |mask, (slot, _)| mask | 1 << slot);
             let pass = self.effect_pass(material, over, provides, resources, remaining, still)?;
-            // Only a pass into a buffer is drawn as a quad already in place.
-            if pass.fragment.unplaced && target.is_none() {
-                return Err(Error::Format(
-                    "a vertex shader that places a_Position without the matrix".into(),
-                ));
-            }
             passes.push(EffectPass {
                 target,
                 reads,

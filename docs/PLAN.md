@@ -60,13 +60,18 @@ rest, by scenes:
 - Text layers, 29 (`unknown-object`), drawn since (below). Groups, `parent` links and solid
   colour layers are drawn too: a child's origin is in its parent's units, turned and scaled
   with it, and a hidden parent hides it unless it disables propagation.
-- Named targets in effects (`fbos`: godrays, blur, shine), 10.
+- Named targets in effects (`fbos`: godrays, blur, shine), 10. An older effect format marks a
+  pass `compose` instead, drawn into a picture of its own for the next pass, as every pass
+  here is; its vertex shader may put its quad in place without the matrix, as passes into
+  buffers do, which is drawn the same way into the picture.
 - The scene's bloom, 13: drawn over each finished frame as Wallpaper Engine's stock bloom
   materials lay it out (`downsample_quarter_bloom`, `downsample_eighth_blur_v`,
   `blur_h_bloom`, `combine`): a quarter size picture of what's above the threshold by its
   brightest channel, pushed away from grey and scaled by strength and tint, blurred down and
   across at an eighth over six steps of eight screen pixels each way, and added back. Our
-  own shaders do the same sums. HDR bloom (`hdr`) is still refused. A script may drive
+  own shaders do the same sums. HDR bloom (`hdr` with `bloom`) is still refused; HDR without
+  it is drawn as usual, which cuts what's brighter than white at each layer rather than at the
+  end: the same, but where a translucent layer covers a pass that went past white. A script may drive
   `bloomstrength` (audio-reactive bloom); it starts from the scene's strength and sees no
   layer.
 - Colour blend modes (`colorBlendMode`), 7: a picture layer is drawn into a target of its own

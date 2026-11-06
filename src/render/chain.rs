@@ -40,6 +40,9 @@ pub(super) struct Pass {
     pub reads: Vec<(u8, Option<usize>)>,
     /// Other layers' finished pictures it reads, by slot and the layer's object.
     pub composites: Vec<(u8, usize)>,
+    /// Its vertex shader puts its quad where it goes without the matrix, as passes into
+    /// buffers are drawn.
+    pub unplaced: bool,
 }
 
 /// Layers' finished pictures, by object, which other layers' effects read.
@@ -285,9 +288,9 @@ impl Chain {
                     .collect();
                 // A pass into a buffer gets its quad already in place, flipped like the rest, so
                 // its matrix comes out the identity; one into the picture, in its pixels.
-                let units = match pass.and_then(|pass| pass.target) {
-                    Some(_) => (2.0, -2.0),
-                    None => (size.0 as f32, size.1 as f32),
+                let units = match pass {
+                    Some(pass) if pass.target.is_some() || pass.unplaced => (2.0, -2.0),
+                    _ => (size.0 as f32, size.1 as f32),
                 };
                 super::bind(gl, program, step, &WHOLE, &placed, units, [1.0; 4], &reads);
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);

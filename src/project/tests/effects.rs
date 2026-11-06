@@ -285,3 +285,17 @@ fn a_pointer_reader_waits_for_a_host_that_gives_the_pointer() {
     assert!(snapshot.layers[0].effects[0].fragment.reads.pointer);
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn a_composed_pass_is_read_by_the_next_one_as_each_pass_is() {
+    let folder = scene("effect-compose", r#"[{"file":"effects/copy/effect.json"}]"#);
+    let write = |text: &str| std::fs::write(folder.join("effects/copy/effect.json"), text).unwrap();
+    write(
+        r#"{"passes":[{"material":"materials/effects/copy.json","compose":true},
+                      {"material":"materials/effects/copy.json"}]}"#,
+    );
+    assert_eq!(refusal(&folder), "drawn");
+    write(r#"{"passes":[{"material":"materials/effects/copy.json","compose":true}]}"#);
+    assert!(refusal(&folder).contains("composed pass nothing reads"));
+    std::fs::remove_dir_all(folder).unwrap();
+}
