@@ -204,6 +204,7 @@ pub struct Renderer {
     size: (f32, f32),
     clear: [f32; 3],
     parallax: Option<Parallax>,
+    shake: Option<crate::scene::Shake>,
     /// How far in front of the scene its camera is, in scene pixels, for what's drawn in
     /// perspective.
     camera: f32,
@@ -245,6 +246,7 @@ impl Renderer {
             size: scene.size,
             clear: scene.clear,
             parallax: scene.parallax,
+            shake: scene.shake,
             camera: scene.size.1 / 2.0 / (scene.fov.to_radians() / 2.0).tan(),
             eye: [0.0; 2],
             inputs: Box::default(),
@@ -338,6 +340,7 @@ impl Renderer {
     /// says so in `needs`, and changes when `follow` says it moved.
     pub fn animated(&self) -> bool {
         self.stage.is_some()
+            || self.shake.is_some()
             || self
                 .layers
                 .iter()
@@ -429,13 +432,18 @@ impl Renderer {
         time: f32,
         delta: f32,
     ) {
-        let shift = self.parallax.map_or([0.0; 2], |parallax| {
+        let mut shift = self.parallax.map_or([0.0; 2], |parallax| {
             let reach = PARALLAX_REACH * parallax.amount * parallax.mouse;
             [
                 -self.eye[0] * reach * self.size.0,
                 -self.eye[1] * reach * self.size.1,
             ]
         });
+        // A shaking camera moves everything the way parallax at full depth does.
+        if let Some(shake) = self.shake {
+            let [x, y] = geometry::shaken(shake, time);
+            shift = [shift[0] + x * self.size.0, shift[1] + y * self.size.1];
+        }
         self.screen.set(target);
         unsafe {
             let host = state::Host::save(gl);

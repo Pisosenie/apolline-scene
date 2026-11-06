@@ -48,6 +48,18 @@ pub fn place_fitted(
     ]
 }
 
+/// Where a shaking camera has moved `time` seconds in, in shares of the scene's size: a smooth
+/// wander a two-hundredth of the scene across per unit of amplitude, quicker with speed and
+/// jitterier with roughness.
+pub(super) fn shaken(shake: crate::scene::Shake, time: f32) -> [f32; 2] {
+    let t = time * shake.speed;
+    let wander = |a: f32, b: f32, c: f32| {
+        (t * a).sin() + 0.5 * (t * b + 1.7).sin() + 0.25 * shake.roughness * (t * c + 0.3).sin()
+    };
+    let reach = shake.amplitude * 0.005 / (1.5 + 0.25 * shake.roughness);
+    [reach * wander(1.3, 2.9, 7.1), reach * wander(1.7, 3.7, 8.3)]
+}
+
 /// `seconds` of the way from `eye` to the pointer, when the whole way takes `delay`.
 pub(super) fn toward(eye: [f32; 2], pointer: [f32; 2], seconds: f32, delay: f32) -> [f32; 2] {
     let reach = if delay > 0.0 {
@@ -61,6 +73,23 @@ pub(super) fn toward(eye: [f32; 2], pointer: [f32; 2], seconds: f32, delay: f32)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shaking_camera_wanders_no_further_than_its_amplitude() {
+        let shake = crate::scene::Shake {
+            amplitude: 0.5,
+            roughness: 1.0,
+            speed: 3.0,
+        };
+        let places: Vec<[f32; 2]> = (0..600).map(|at| shaken(shake, at as f32 / 60.0)).collect();
+        assert!(
+            places
+                .iter()
+                .flatten()
+                .all(|share| share.abs() <= 0.5 * 0.005 + 1e-6)
+        );
+        assert!(places.windows(2).any(|pair| pair[0] != pair[1]));
+    }
 
     fn apply(affine: Affine, x: f32, y: f32) -> (f32, f32) {
         let row = |r: [f32; 3]| r[0] * x + r[1] * y + r[2];

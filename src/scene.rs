@@ -23,6 +23,8 @@ pub struct Scene {
     pub perspective: bool,
     pub clear: [f32; 3],
     pub parallax: Option<Parallax>,
+    /// The camera shaking, when it does.
+    pub shake: Option<Shake>,
     /// How wide the camera sees up and down, in degrees, for what's drawn in perspective.
     pub fov: f32,
     pub objects: Vec<Object>,
@@ -145,6 +147,14 @@ pub struct Parallax {
     pub mouse: f32,
 }
 
+/// How the camera shakes: how far, how jittery and how fast.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shake {
+    pub amplitude: f32,
+    pub roughness: f32,
+    pub speed: f32,
+}
+
 pub enum Object {
     Image(Image),
     Text(Text),
@@ -257,6 +267,17 @@ impl Scene {
                 delay: number(field("cameraparallaxdelay")).unwrap_or(0.1),
                 mouse: number(field("cameraparallaxmouseinfluence")).unwrap_or(0.5),
             });
+        let shake = flag(field("camerashake")).unwrap_or(false).then(|| Shake {
+            amplitude: number(field("camerashakeamplitude"))
+                .unwrap_or(0.5)
+                .clamp(0.0, 10.0),
+            roughness: number(field("camerashakeroughness"))
+                .unwrap_or(1.0)
+                .clamp(0.0, 10.0),
+            speed: number(field("camerashakespeed"))
+                .unwrap_or(1.0)
+                .clamp(0.0, 100.0),
+        });
         let raw = root
             .get("objects")
             .and_then(Value::as_array)
@@ -277,6 +298,7 @@ impl Scene {
             perspective: size.is_none(),
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
+            shake,
             fov: number(field("fov"))
                 .filter(|fov| *fov > 1.0 && *fov < 170.0)
                 .unwrap_or(50.0),
