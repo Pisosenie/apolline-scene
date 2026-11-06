@@ -26,27 +26,59 @@ pub fn noise(seed: u64, at: [f64; 3]) -> f32 {
     total.clamp(-1.0, 1.0)
 }
 
-/// Three noises, one along each axis, for a push in any direction.
+/// Three noises, one along each axis, for a push in any direction. They share the lattice
+/// and its weights, and each corner's one hash gives all three directions from its own bits:
+/// turbulence asks for this per particle per step.
 pub fn field(seed: u64, at: [f64; 3]) -> [f32; 3] {
-    [0u64, 1, 2].map(|axis| noise(seed ^ axis.wrapping_mul(0xA24B_AED4_963E_E407), at))
+    let cell = at.map(f64::floor);
+    let within = [0, 1, 2].map(|axis| (at[axis] - cell[axis]) as f32);
+    let eased = within.map(|t| t * t * t * (t * (t * 6.0 - 15.0) + 10.0));
+    let mut total = [0.0f32; 3];
+    for corner in 0..8u32 {
+        let side = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
+        let lattice = [0, 1, 2].map(|axis| cell[axis] as i64 + i64::from(side[axis]));
+        let mut weight = 1.0;
+        let mut offset = [0.0f32; 3];
+        for axis in 0..3 {
+            offset[axis] = within[axis] - side[axis] as f32;
+            weight *= if side[axis] == 1 {
+                eased[axis]
+            } else {
+                1.0 - eased[axis]
+            };
+        }
+        let hash = hashed(seed, lattice);
+        for (noise, total) in total.iter_mut().enumerate() {
+            let gradient = EDGES[((hash >> (noise * 21)) & 0x1F_FFFF) as usize % 12];
+            let dot: f32 = (0..3).map(|axis| gradient[axis] * offset[axis]).sum();
+            *total += dot * weight;
+        }
+    }
+    total.map(|value| value.clamp(-1.0, 1.0))
 }
 
-/// One of the twelve directions to a cube's edges at a lattice point.
+/// The twelve directions to a cube's edges.
+const EDGES: [[f32; 3]; 12] = [
+    [1.0, 1.0, 0.0],
+    [-1.0, 1.0, 0.0],
+    [1.0, -1.0, 0.0],
+    [-1.0, -1.0, 0.0],
+    [1.0, 0.0, 1.0],
+    [-1.0, 0.0, 1.0],
+    [1.0, 0.0, -1.0],
+    [-1.0, 0.0, -1.0],
+    [0.0, 1.0, 1.0],
+    [0.0, -1.0, 1.0],
+    [0.0, 1.0, -1.0],
+    [0.0, -1.0, -1.0],
+];
+
+/// One of the twelve directions at a lattice point.
 fn gradient(seed: u64, at: [i64; 3]) -> [f32; 3] {
-    const EDGES: [[f32; 3]; 12] = [
-        [1.0, 1.0, 0.0],
-        [-1.0, 1.0, 0.0],
-        [1.0, -1.0, 0.0],
-        [-1.0, -1.0, 0.0],
-        [1.0, 0.0, 1.0],
-        [-1.0, 0.0, 1.0],
-        [1.0, 0.0, -1.0],
-        [-1.0, 0.0, -1.0],
-        [0.0, 1.0, 1.0],
-        [0.0, -1.0, 1.0],
-        [0.0, 1.0, -1.0],
-        [0.0, -1.0, -1.0],
-    ];
+    EDGES[(hashed(seed, at) % 12) as usize]
+}
+
+fn hashed(seed: u64, at: [i64; 3]) -> u64 {
     const MIXES: [u64; 3] = [
         0x9E37_79B9_7F4A_7C15,
         0xC2B2_AE3D_27D4_EB4F,
@@ -58,7 +90,7 @@ fn gradient(seed: u64, at: [i64; 3]) -> [f32; 3] {
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     }
-    EDGES[((z ^ (z >> 31)) % 12) as usize]
+    z ^ (z >> 31)
 }
 
 #[cfg(test)]
