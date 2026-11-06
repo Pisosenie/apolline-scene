@@ -2,6 +2,7 @@
 //! the host has bound. The scene covers the target the way a wallpaper does: scaled to fill,
 //! centred and cropped.
 
+mod bloom;
 mod build;
 mod chain;
 mod compile;
@@ -245,6 +246,8 @@ pub struct Renderer {
     composited: std::collections::BTreeSet<usize>,
     /// The frame drawn so far, copied for composition layers.
     frame: compose::Frame,
+    /// The scene's bloom, added over each finished frame.
+    bloom: Option<bloom::Bloom>,
     /// The size of the last target drawn to, which scripts see as the screen.
     screen: std::cell::Cell<(u32, u32)>,
 }
@@ -265,6 +268,20 @@ impl Renderer {
     /// `gl` has to be current on this thread.
     pub unsafe fn new(gl: &glow::Context, scene: &Scene, layers: &[Layer]) -> Result<Self, Error> {
         let program = unsafe { program(gl, VERTEX, FRAGMENT)? };
+        let bloom = match scene
+            .bloom
+            .map(|settings| unsafe { bloom::Bloom::new(gl, settings) })
+            .transpose()
+        {
+            Ok(bloom) => bloom,
+            Err(error) => {
+                unsafe {
+                    gl.delete_vertex_array(program.vao);
+                    gl.delete_program(program.id);
+                }
+                return Err(error);
+            }
+        };
         let mut renderer = Renderer {
             programs: vec![program],
             layers: Vec::new(),
@@ -282,6 +299,7 @@ impl Renderer {
             wiring: scripted::Wiring::default(),
             composited: std::collections::BTreeSet::new(),
             frame: compose::Frame::default(),
+            bloom,
             screen: std::cell::Cell::new((scene.size.0 as u32, scene.size.1 as u32)),
         };
         let mut builder = build::Builder::new(gl);
@@ -600,8 +618,13 @@ impl Renderer {
                     None => gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4),
                 }
             }
-            gl.disable(glow::BLEND);
             gl.disable(glow::SCISSOR_TEST);
+            if let Some(bloom) = &self.bloom
+                && let Some(frame) = self.frame.copy(gl, target)
+            {
+                bloom.draw(gl, frame, target, &host);
+            }
+            gl.disable(glow::BLEND);
             gl.color_mask(true, true, true, true);
             gl.bind_vertex_array(None);
             host.restore(gl);
@@ -655,6 +678,9 @@ impl Renderer {
                 gl.delete_program(program.id);
             }
             self.frame.delete(gl);
+            if let Some(bloom) = &self.bloom {
+                bloom.delete(gl);
+            }
         }
     }
 }

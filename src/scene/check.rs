@@ -269,9 +269,6 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         if flag(field("windenabled")) == Some(true) {
             note(Missing::Setting("wind"));
         }
-        if flag(field("bloom")) == Some(true) {
-            note(Missing::Setting("the scene's bloom"));
-        }
         if flag(field("clearenabled")) == Some(false) {
             note(Missing::Setting("a scene that isn't cleared"));
         }
@@ -605,7 +602,6 @@ mod tests {
         let found = refusals(&scene);
         for missing in [
             Missing::UnknownKey("general.mystery".into()),
-            Missing::Setting("the scene's bloom"),
             Missing::Setting("camera zoom"),
             Missing::UnknownKey("objects[0].wobble".into()),
             Missing::Setting("colour blend modes"),

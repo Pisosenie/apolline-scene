@@ -19,7 +19,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 cargo build --quiet --example view --manifest-path "$root/Cargo.toml"
 view=${CARGO_TARGET_DIR:-$root/target}/debug/examples/view
-projects=(demo fragment mask wave vertex effect effect-script animation sprite pointer buffer composite values particle inputs script text dialect)
+projects=(demo fragment mask wave vertex effect effect-script animation sprite pointer buffer composite bloom glow values particle inputs script text dialect)
 python3 "$root/tools/demo-scene.py" "$work/demo" > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/fragment" --fragment-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/mask" --mask-demo > /dev/null
@@ -33,6 +33,8 @@ python3 "$root/tools/demo-scene.py" "$work/pointer" --pointer-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/buffer" --buffer-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/composite" --composite-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/compose" --compose-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/bloom" --bloom-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/glow" --bloom-demo --bloom-threshold 0 > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/inputs" --inputs-demo > /dev/null
@@ -91,9 +93,10 @@ raw = zlib.decompress(packed)
 print(list(raw[1:1 + (4 if color == 6 else 3)]), "all", hashlib.sha1(raw).hexdigest()[:12])
 PY
 }
-# The largest difference in any channel between two shots of one size.
+# The largest difference in any channel between two shots of one size, or with "lighter" the
+# least and most the first is lighter than the second by.
 difference() {
-    python3 - "$1" "$2" <<'PY'
+    python3 - "$1" "$2" "${3:-}" <<'PY'
 import struct, sys, zlib
 def pixels(path):
     data = open(path, "rb").read()
@@ -127,7 +130,11 @@ def pixels(path):
         above = line
     return b"".join(rows)
 a, b = pixels(sys.argv[1]), pixels(sys.argv[2])
-print(max(abs(x - y) for x, y in zip(a, b)) if len(a) == len(b) else 255)
+if sys.argv[3] == "lighter":
+    lighter = [x - y for x, y in zip(a, b)] if len(a) == len(b) else [-255]
+    print(min(lighter), max(lighter))
+else:
+    print(max(abs(x - y) for x, y in zip(a, b)) if len(a) == len(b) else 255)
 PY
 }
 for project in "${projects[@]}"; do
@@ -141,7 +148,7 @@ for project in "${projects[@]}"; do
     echo "$project: first pixel $pixel"
 done
 # Hashes differ between drivers, but these demos have to draw what the plain one does on each.
-for project in vertex effect effect-script animation pointer buffer composite inputs script; do
+for project in vertex effect effect-script animation pointer buffer composite bloom inputs script; do
     cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done
 # A composition layer draws the frame at the scene's size, so it's shot at that size, against
@@ -149,5 +156,8 @@ done
 "$view" --shot "$work/compose.png" --shot-size 1920x1080 "$work/compose" 2>&1 | sed "s/^/compose: /"
 "$view" --shot "$work/demo-1080.png" --shot-size 1920x1080 "$work/demo" > /dev/null 2>&1
 [ "$(difference "$work/compose.png" "$work/demo-1080.png")" -eq 0 ] && echo "compose: same as demo" || echo "compose: DIFFERS from demo"
+# Bloom from every brightness up only ever lightens, and does somewhere.
+read -r least most <<< "$(difference "$work/glow.png" "$work/demo.png" lighter)"
+[ "$least" -ge 0 ] && [ "$most" -gt 8 ] && echo "glow: lighter than demo" || echo "glow: NOT lighter than demo ($least $most)"
 # A frame read from inside a sprite sheet rounds its way to the picture a little differently.
 [ "$(difference "$work/sprite.png" "$work/demo.png")" -le 1 ] && echo "sprite: within one of demo" || echo "sprite: DIFFERS from demo"

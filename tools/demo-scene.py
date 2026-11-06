@@ -21,6 +21,8 @@ demos.add_argument("--pointer-demo", action="store_true", help="an effect on the
 demos.add_argument("--buffer-demo", action="store_true", help="an effect on the sun that copies it into a half-size buffer and checks the copy against the sun, turning it red where they differ")
 demos.add_argument("--composite-demo", action="store_true", help="a hidden copy of the sun whose finished picture an effect on the sun reads and checks against its own, turning it red where they differ")
 demos.add_argument("--compose-demo", action="store_true", help="a composition layer over the whole scene whose two inversions undo each other")
+demos.add_argument("--bloom-demo", action="store_true", help="turn on the scene's bloom, which at --bloom-threshold 1 leaves it as it is")
+parser.add_argument("--bloom-threshold", type=float, default=1.0, help="how bright --bloom-demo's glow starts (default 1, none)")
 parser.add_argument("--inversions", type=int, default=2, help="how many inversions --compose-demo's layer has (default 2)")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
@@ -348,6 +350,10 @@ if args.compose_demo:
     files["effects/flip/effect.json"] = b'{"name": "flip", "passes": [{"material": "materials/effects/flip.json"}]}'
     files["materials/effects/flip.json"] = b'{"passes": [{"shader": "effects/flip", "textures": [null]}]}'
     files["shaders/effects/flip.frag"] = b"varying vec2 v_TexCoord;\nuniform sampler2D g_Texture0;\nvoid main() { vec4 p = texSample2D(g_Texture0, v_TexCoord); gl_FragColor = vec4(1.0 - p.rgb, p.a); }\n"
+if args.bloom_demo:
+    scene = json.loads(files["scene.json"])
+    scene["general"].update({"bloom": True, "bloomstrength": 2, "bloomthreshold": args.bloom_threshold})
+    files["scene.json"] = json.dumps(scene).encode()
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'

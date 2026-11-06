@@ -2,12 +2,14 @@
 //! Image layers, text layers and particle systems are read in full. Sounds and lights are kept
 //! by kind only, so a host can tell what isn't drawn yet.
 
+mod bloom;
 mod check;
 mod effects;
 pub(crate) mod timeline;
 
 use serde_json::Value;
 
+pub use bloom::Bloom;
 pub use check::Missing;
 pub(crate) use effects::Driven;
 pub use effects::Effect;
@@ -25,6 +27,7 @@ pub struct Scene {
     pub parallax: Option<Parallax>,
     /// The camera shaking, when it does.
     pub shake: Option<Shake>,
+    pub bloom: Option<Bloom>,
     /// How wide the camera sees up and down, in degrees, for what's drawn in perspective.
     pub fov: f32,
     /// How much nearer the camera brings the scene, about its middle.
@@ -303,6 +306,7 @@ impl Scene {
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
             shake,
+            bloom: bloom::read(field),
             fov: number(field("fov"))
                 .filter(|fov| *fov > 1.0 && *fov < 170.0)
                 .unwrap_or(50.0),
