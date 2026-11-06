@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::system::{Between, Operator, Shape, Sheet, System};
+use super::system::{Between, Operator, Shape, Sheet, Swing, System};
 
 /// Simulated in steps of a sixtieth of a second, whatever the frame rate.
 const RATE: f64 = 60.0;
@@ -23,6 +23,8 @@ pub struct Particle {
     born: Look,
     /// The frame of a sprite sheet it shows, 0 to 1, when the system picks one at random.
     pick: f32,
+    /// What its oscillations draw their frequency, scale and phase from.
+    seed: u64,
 }
 
 impl Particle {
@@ -224,6 +226,16 @@ impl Simulation {
             } else {
                 0.0
             },
+            seed: if system
+                .operators
+                .iter()
+                .any(|operator| matches!(operator, Operator::Oscillate { .. }))
+            {
+                self.random = self.random.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                self.random
+            } else {
+                0
+            },
         }
     }
 
@@ -261,8 +273,48 @@ fn live(particle: &mut Particle, operators: &[Operator]) {
     let mut size = 1.0;
     let mut alpha = 1.0;
     let mut color = [1.0; 3];
-    for operator in operators {
+    for (at, operator) in operators.iter().enumerate() {
         match *operator {
+            Operator::Oscillate {
+                what,
+                frequency,
+                scale,
+                phase,
+                mask,
+                blend,
+            } => {
+                let pick = |which: u64, range: [f32; 2]| {
+                    range[0] + (range[1] - range[0]) * hashed(particle.seed, at as u64 * 8 + which)
+                };
+                let swing = |which: u64, t: f32| {
+                    let turn = std::f32::consts::TAU * pick(which, frequency) * t;
+                    (turn + pick(which + 1, phase)).sin()
+                };
+                let weight = fade(t, blend);
+                match what {
+                    Swing::Alpha | Swing::Size => {
+                        let value = scale[0] + (scale[1] - scale[0]) * (0.5 + 0.5 * swing(0, t));
+                        let value = 1.0 + (value - 1.0) * weight;
+                        if what == Swing::Alpha {
+                            alpha *= value;
+                        } else {
+                            size *= value;
+                        }
+                    }
+                    Swing::Place => {
+                        // Moved by what the swing moved this step, on top of any other motion.
+                        let before = ((particle.age - STEP) / particle.life).clamp(0.0, 1.0);
+                        let reach = pick(6, scale);
+                        for (axis, (position, mask)) in
+                            particle.position.iter_mut().zip(mask).enumerate()
+                        {
+                            let which = 2 * axis as u64;
+                            let offset = |t: f32| mask * reach * swing(which, t) * fade(t, blend);
+                            *position += offset(t) - offset(before);
+                        }
+                    }
+                }
+            }
             Operator::Movement { gravity, drag } => {
                 let keep = (1.0 - drag * STEP).max(0.0);
                 let Particle {
@@ -301,6 +353,33 @@ fn live(particle: &mut Particle, operators: &[Operator]) {
     particle.size = particle.born.size * size;
     particle.alpha = (particle.born.alpha * alpha).clamp(0.0, 1.0);
     particle.color = [0, 1, 2].map(|channel| particle.born.color[channel] * color[channel]);
+}
+
+/// How much of an operator is at work a share `t` of the way through a life, fading in over
+/// the first two of `blend` and out over the last two.
+fn fade(t: f32, blend: [f32; 4]) -> f32 {
+    let rise = |from: f32, to: f32| {
+        if to - from < 1e-6 {
+            if t >= from { 1.0 } else { 0.0 }
+        } else {
+            ((t - from) / (to - from)).clamp(0.0, 1.0)
+        }
+    };
+    let out = if blend[2] >= 1.0 {
+        1.0
+    } else {
+        1.0 - rise(blend[2], blend[3])
+    };
+    rise(blend[0], blend[1]) * out
+}
+
+/// A number from 0 to 1 that `seed` and `which` always give: splitmix64.
+fn hashed(seed: u64, which: u64) -> f32 {
+    let mut z = seed ^ which.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 40) as f32 / (1u64 << 24) as f32
 }
 
 /// From the first value to the second between two shares of a life, held either side.
@@ -415,5 +494,59 @@ mod tests {
             restarted.particles() == run.particles(),
             "restarting kept something"
         );
+    }
+
+    #[test]
+    fn particles_swing_their_alpha_and_place_each_their_own_way() {
+        let swinging = system(
+            r#"{
+            "material": "m.json", "maxcount": 50,
+            "emitter": [{"name": "boxrandom", "rate": 30, "origin": "0 0 0", "distancemin": "0 0 0", "distancemax": "0 0 0"}],
+            "initializer": [{"name": "lifetimerandom", "min": 2, "max": 2}],
+            "operator": [{"name": "oscillatealpha", "frequencymin": 2, "frequencymax": 4, "scalemin": 0.25, "scalemax": 1},
+                         {"name": "oscillateposition", "frequencymin": 1, "frequencymax": 1, "scalemin": 10, "scalemax": 10, "mask": "1 0 0"}],
+            "renderer": [{"name": "sprite"}]
+        }"#,
+        );
+        let mut simulation = Simulation::new(swinging, 3);
+        simulation.advance(0.1);
+        let mut alphas = Vec::new();
+        for _ in 0..60 {
+            simulation.advance(1.0 / 60.0);
+            let first = &simulation.particles()[0];
+            alphas.push(first.alpha);
+            // Only x swings, from where it was let out, never further than its reach each way.
+            assert!(
+                first.position[0].abs() <= 20.0 + 1e-3,
+                "{:?}",
+                first.position
+            );
+            assert_eq!(first.position[1], 0.0);
+        }
+        assert!(
+            alphas
+                .iter()
+                .all(|alpha| (0.25 - 1e-4..=1.0 + 1e-4).contains(alpha))
+        );
+        let (low, high) = alphas.iter().fold((1.0f32, 0.0f32), |(low, high), alpha| {
+            (low.min(*alpha), high.max(*alpha))
+        });
+        assert!(high - low > 0.5, "the alpha barely moved: {low}..{high}");
+        let firsts: Vec<f32> = simulation.particles()[..5]
+            .iter()
+            .map(|particle| particle.alpha)
+            .collect();
+        assert!(
+            firsts.windows(2).any(|pair| pair[0] != pair[1]),
+            "every particle swings alike"
+        );
+    }
+
+    #[test]
+    fn an_operator_fades_in_and_out_over_a_life() {
+        assert_eq!(fade(0.5, [0.0, 0.0, 1.0, 1.0]), 1.0);
+        assert!((fade(0.1, [0.0, 0.2, 1.0, 1.0]) - 0.5).abs() < 1e-5);
+        assert!((fade(0.9, [0.0, 0.0, 0.8, 1.0]) - 0.5).abs() < 1e-5);
+        assert_eq!(fade(1.0, [0.0, 0.0, 1.0, 1.0]), 1.0);
     }
 }

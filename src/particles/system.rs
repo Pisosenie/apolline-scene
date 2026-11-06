@@ -132,6 +132,27 @@ pub enum Operator {
         times: [f32; 2],
         values: [[f32; 3]; 2],
     },
+    /// Each particle swinging its alpha, size or place at a frequency, scale and phase of
+    /// its own from these ranges, fading in and out over its life as `blend` says.
+    Oscillate {
+        what: Swing,
+        /// Swings a life.
+        frequency: [f32; 2],
+        scale: [f32; 2],
+        phase: [f32; 2],
+        /// How far each axis moves, for places.
+        mask: [f32; 3],
+        /// Shares of a life where it starts and finishes fading in, and out.
+        blend: [f32; 4],
+    },
+}
+
+/// What an oscillation swings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Swing {
+    Alpha,
+    Size,
+    Place,
 }
 
 const ROOT: &[&str] = &[
@@ -331,6 +352,20 @@ fn initialize(value: &Value, spawn: &mut Spawn) -> Result<(), Error> {
     Ok(())
 }
 
+const OSCILLATE: &[&str] = &[
+    "blendinend",
+    "blendinstart",
+    "blendoutend",
+    "blendoutstart",
+    "frequencymax",
+    "frequencymin",
+    "mask",
+    "phasemax",
+    "phasemin",
+    "scalemax",
+    "scalemin",
+];
+
 fn operator(value: &Value) -> Result<Operator, Error> {
     let field = |key: &str, fill: f32| number(value.get(key)).unwrap_or(fill);
     let times = || [field("starttime", 0.0), field("endtime", 1.0)];
@@ -377,6 +412,31 @@ fn operator(value: &Value) -> Result<Operator, Error> {
                 values: [
                     vector(value.get("startvalue"), [1.0; 3]),
                     vector(value.get("endvalue"), [1.0; 3]),
+                ],
+            }
+        }
+        Some(kind @ ("oscillatealpha" | "oscillatesize" | "oscillateposition")) => {
+            known(value, OSCILLATE, "operator")?;
+            let what = match kind {
+                "oscillatealpha" => Swing::Alpha,
+                "oscillatesize" => Swing::Size,
+                _ => Swing::Place,
+            };
+            let range = |low: &str, high: &str, fill: [f32; 2]| {
+                let low = field(low, fill[0]);
+                [low, field(high, fill[1]).max(low)]
+            };
+            Operator::Oscillate {
+                what,
+                frequency: range("frequencymin", "frequencymax", [0.0, 10.0]),
+                scale: range("scalemin", "scalemax", [0.0, 1.0]),
+                phase: range("phasemin", "phasemax", [0.0, std::f32::consts::TAU]),
+                mask: vector(value.get("mask"), [1.0, 1.0, 0.0]),
+                blend: [
+                    field("blendinstart", 0.0),
+                    field("blendinend", 0.0),
+                    field("blendoutstart", 1.0),
+                    field("blendoutend", 1.0),
                 ],
             }
         }
