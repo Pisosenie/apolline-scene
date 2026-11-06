@@ -442,11 +442,6 @@ impl Scene {
                 {
                     note(Missing::Rotation3d)
                 }
-                Object::Particles(particles)
-                    if particles.angles[0] != 0.0 || particles.angles[1] != 0.0 =>
-                {
-                    note(Missing::Setting("particle systems tilted out of the scene"))
-                }
                 Object::Light => note(Missing::Lights),
                 Object::Other => note(Missing::UnknownObject),
                 _ => {}

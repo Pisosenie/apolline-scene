@@ -160,7 +160,12 @@ burst when one is born, its rate while it lives, `origin` away. Without the worl
 particles move with the one they came from and go when it dies (a shooting star's glow); with
 it they stay where they were let out (a firefly's trail). The child's `maxcount` bounds all of
 them together, and its own `starttime` gives way to its parent's. Children let out when
-particles are born or die (`eventspawn`, `eventdeath`) are still refused. A rope trail
+particles are born or die (`eventspawn`, `eventdeath`) run the same twin and burst once where
+each is born or where each was last before it died; what comes out goes its own way. One of
+those whose emitters keep letting particles out by rate is refused: when it would stop isn't
+known. A system tilted out of the scene (`angles` x and y) has its particles turned about x,
+then y, then z and seen from in front, its sprites still facing the screen. A turbulent start
+may listen to the music as an emitter does, its speed going as loud as it is. A rope trail
 (`ropetrail`) is drawn as one strip from its particle back along its velocity for `length`
 seconds, or its age if younger, its picture running end to end a width past each: the path it
 came along, straightened. A system may list two renderers, a sprite and a trail behind it,

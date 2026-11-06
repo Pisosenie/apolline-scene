@@ -3,7 +3,7 @@
 
 use super::material::{Resources, names, object};
 use super::*;
-use crate::particles::{Child, System};
+use crate::particles::{Child, System, Tie};
 use crate::scene::Particles;
 use crate::value::number;
 
@@ -39,11 +39,22 @@ impl Project {
                     ..placed.clone()
                 };
                 let layer = self.particle_layer(&file, child.max, resources, remaining)?;
+                // One let out when particles are born or die is drawn as its bursts there.
+                let once = matches!(child.tie, Some(Tie::Spawn | Tie::Death));
+                if once
+                    && layer.particles.as_ref().is_some_and(|system| {
+                        system.emitters.iter().any(|emitter| emitter.rate > 0.0)
+                    })
+                {
+                    return Err(Error::Format(
+                        "a child system let out by particles that keeps letting out its own".into(),
+                    ));
+                }
                 // The family's layers are drawn in this order, so its parent is this far back.
                 let behind = family.len() + born.len() - at;
                 born.push(Layer {
                     child: Some(within(parent.child.as_ref(), child)),
-                    leader: child.follow.then_some(behind),
+                    leader: child.tie.map(|_| behind),
                     ..layer
                 });
             }
@@ -235,7 +246,7 @@ fn within(parent: Option<&Child>, child: &Child) -> Child {
         scale: [0, 1, 2].map(|axis| parent.scale[axis] * child.scale[axis]),
         angles: [0, 1, 2].map(|axis| parent.angles[axis] + child.angles[axis]),
         max: child.max,
-        follow: child.follow,
+        tie: child.tie,
     }
 }
 

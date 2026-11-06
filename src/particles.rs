@@ -12,6 +12,6 @@ pub use audio::Hearing;
 pub use control::Control;
 pub use simulation::{Particle, Simulation};
 pub use system::{
-    Between, Child, Emitter, MOST, Operator, Renderer, Shape, Sheet, Spawn, Swing, System,
+    Between, Child, Emitter, MOST, Operator, Renderer, Shape, Sheet, Spawn, Swing, System, Tie,
     Turbulent,
 };

@@ -76,6 +76,8 @@ pub(super) struct Swarm {
     sides: [f32; 4],
     /// How many times as tall as wide its picture is.
     ratio: f32,
+    /// How far the system is tilted out of the scene about x and then y, in radians.
+    pub tilt: std::cell::Cell<[f32; 2]>,
 }
 
 impl Swarm {
@@ -144,6 +146,7 @@ impl Swarm {
                 } else {
                     1.0
                 },
+                tilt: std::cell::Cell::new([0.0; 2]),
             })
         }
     }
@@ -153,10 +156,10 @@ impl Swarm {
         capacity.max(1) * FLOATS * 4
     }
 
-    /// Lets its particles out from each of `leader`'s, running a twin of it alongside.
-    pub fn follow(&self, leader: &Swarm) {
+    /// Lets its particles out from `leader`'s as `tie` says, running a twin of it alongside.
+    pub fn follow(&self, leader: &Swarm, tie: crate::particles::Tie) {
         let twin = leader.simulation.borrow().twin();
-        self.simulation.borrow_mut().follow(twin);
+        self.simulation.borrow_mut().follow(twin, tie);
     }
 
     /// Scales one of the system's instance overrides by `factor` from where its file leaves it.
@@ -198,6 +201,8 @@ impl Swarm {
         if simulation.listens() {
             simulation.hear(spectrum);
         }
+        let [ax, ay] = self.tilt.get();
+        let turn = rotation([ax, ay, angle]);
         let (sin, cos) = angle.sin_cos();
         if simulation.points() {
             let [x, y] = [pointer[0] - origin[0], pointer[1] - origin[1]];
@@ -225,20 +230,18 @@ impl Swarm {
             .iter()
             .flat_map(|renderer| particles.iter().map(move |particle| (renderer, particle)))
         {
-            let [vx, vy, _] = particle.velocity();
+            let velocity = particle.velocity();
             // A rope lies behind its particle, as far back as it has come in its length.
             let back = match renderer {
                 Renderer::Rope { length } => length.min(particle.age()),
                 _ => 0.0,
             };
-            let x = (particle.position[0] - vx * back * 0.5) * scale[0];
-            let y = (particle.position[1] - vy * back * 0.5) * scale[1];
-            let at = [origin[0] + cos * x - sin * y, origin[1] + sin * x + cos * y];
-            let depth = if perspective {
-                particle.position[2] * scale[2]
-            } else {
-                0.0
-            };
+            let place =
+                |axis: usize| (particle.position[axis] - velocity[axis] * back * 0.5) * scale[axis];
+            let [x, y, z] = turned(&turn, [place(0), place(1), place(2)]);
+            let [vx, vy, _] = turned(&turn, [0, 1, 2].map(|axis| velocity[axis] * scale[axis]));
+            let at = [origin[0] + x, origin[1] + y];
+            let depth = if perspective { z } else { 0.0 };
             let (at, near) = seen(at, depth, middle, distance);
             let ([now, next], onward) =
                 frames(self.corners.len(), particle.sheet(sheet), sheet, crisp);
@@ -246,15 +249,13 @@ impl Swarm {
             let (turn, stretch) = match renderer {
                 Renderer::Sprite => (particle.rotation + angle, self.ratio),
                 Renderer::Trail { length, min, max } => {
-                    let (heading, long) =
-                        trail([vx * scale[0], vy * scale[1]], angle, [length, min, max]);
+                    let (heading, long) = trail([vx, vy], 0.0, [length, min, max]);
                     (heading, long * self.ratio)
                 }
                 // Its picture runs from end to end, a width past each.
                 Renderer::Rope { .. } => {
-                    let (heading, _) =
-                        trail([vx * scale[0], vy * scale[1]], angle, [0.0, 0.0, 0.0]);
-                    let reach = (vx * scale[0]).hypot(vy * scale[1]) * back * near;
+                    let (heading, _) = trail([vx, vy], 0.0, [0.0, 0.0, 0.0]);
+                    let reach = vx.hypot(vy) * back * near;
                     (heading, (reach + width) / width.max(1e-6))
                 }
             };
@@ -298,6 +299,22 @@ impl Swarm {
             gl.delete_buffer(self.buffer);
         }
     }
+}
+
+/// Turning about x, then y, then z, as a matrix of rows.
+fn rotation([x, y, z]: [f32; 3]) -> [[f32; 3]; 3] {
+    let (sx, cx) = x.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    let (sz, cz) = z.sin_cos();
+    [
+        [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+        [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+        [-sy, cy * sx, cy * cx],
+    ]
+}
+
+fn turned(rows: &[[f32; 3]; 3], point: [f32; 3]) -> [f32; 3] {
+    rows.map(|row| row[0] * point[0] + row[1] * point[1] + row[2] * point[2])
 }
 
 /// Which way a trail lies and how many times its width it is long, for a particle moving at
@@ -348,7 +365,26 @@ fn seen(at: [f32; 2], depth: f32, middle: [f32; 2], distance: f32) -> ([f32; 2],
 
 #[cfg(test)]
 mod tests {
-    use super::{frames, seen, trail};
+    use super::{frames, rotation, seen, trail, turned};
+
+    #[test]
+    fn a_tilted_system_is_seen_squeezed_and_a_turned_one_turned() {
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
+        let quarter = std::f32::consts::FRAC_PI_2;
+        assert!(near(
+            turned(&rotation([0.0, 0.0, quarter]), [1.0, 0.0, 0.0]),
+            [0.0, 1.0, 0.0]
+        ));
+        let tilt = 0.5f32;
+        assert!(near(
+            turned(&rotation([tilt, 0.0, 0.0]), [0.0, 1.0, 0.0]),
+            [0.0, tilt.cos(), tilt.sin()]
+        ));
+        assert!(near(
+            turned(&rotation([0.0, tilt, 0.0]), [1.0, 0.0, 0.0]),
+            [tilt.cos(), 0.0, -tilt.sin()]
+        ));
+    }
 
     #[test]
     fn trails_lie_along_their_way_as_long_as_their_speed_says() {

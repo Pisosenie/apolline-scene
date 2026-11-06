@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::noise;
-use super::system::{Between, Operator, Shape, Sheet, Swing, System, Turbulent};
+use super::system::{Between, Operator, Shape, Sheet, Swing, System, Tie, Turbulent};
 
 /// Simulated in steps of a sixtieth of a second, whatever the frame rate.
 const RATE: f64 = 60.0;
@@ -89,10 +89,12 @@ pub struct Simulation {
     most: usize,
     /// What share of its rate each emitter lets out at how loud the music is now.
     heard: Vec<f32>,
+    /// What share of its speed a turbulent start gives at how loud the music is now.
+    stirred: f32,
     /// Particles let out so far, which numbers the next.
     serial: u64,
-    /// The parent system run alongside, for one let out from each of its particles.
-    leader: Option<Box<Simulation>>,
+    /// The parent system run alongside, for one its particles let out, and when they do.
+    leader: Option<(Box<Simulation>, Tie)>,
     /// Where each of the parent's particles was a step ago and what its emitters owe, by its
     /// serial.
     following: HashMap<u64, Follow>,
@@ -140,8 +142,14 @@ impl Simulation {
                     .map_or(1.0, |hearing| hearing.share(&silence))
             })
             .collect();
+        let stirred = system
+            .spawn
+            .turbulent
+            .and_then(|turbulent| turbulent.hearing)
+            .map_or(1.0, |hearing| hearing.share(&silence));
         let mut simulation = Simulation {
             heard,
+            stirred,
             owed: vec![0.0; system.emitters.len()],
             system,
             seed,
@@ -165,16 +173,16 @@ impl Simulation {
     pub fn twin(&self) -> Simulation {
         let mut twin = Simulation::new(Arc::clone(&self.system), self.seed);
         twin.most = self.most;
-        if let Some(leader) = &self.leader {
-            twin.follow(leader.twin());
+        if let Some((leader, tie)) = &self.leader {
+            twin.follow(leader.twin(), *tie);
         }
         twin
     }
 
     /// Lets its particles out from each of `leader`'s instead of its own origin, running it
     /// alongside; started again from there.
-    pub fn follow(&mut self, leader: Simulation) {
-        self.leader = Some(Box::new(leader));
+    pub fn follow(&mut self, leader: Simulation, tie: Tie) {
+        self.leader = Some((Box::new(leader), tie));
         self.restart();
     }
 
@@ -198,7 +206,7 @@ impl Simulation {
         self.taken = 0;
         self.serial = 0;
         self.following.clear();
-        if let Some(leader) = &mut self.leader {
+        if let Some((leader, _)) = &mut self.leader {
             leader.reset();
             return;
         }
@@ -212,7 +220,7 @@ impl Simulation {
     fn warmup(&self) -> f32 {
         self.leader
             .as_ref()
-            .map_or(self.system.warmup, |leader| leader.warmup())
+            .map_or(self.system.warmup, |(leader, _)| leader.warmup())
     }
 
     /// Lets a particle out of emitter `at`, `from` away from where it would be, if there's
@@ -262,7 +270,10 @@ impl Simulation {
         self.system.operators.iter().any(|operator| match operator {
             Operator::Attract { control, .. } => self.system.controls[*control].pointer,
             _ => false,
-        }) || self.leader.as_ref().is_some_and(|leader| leader.points())
+        }) || self
+            .leader
+            .as_ref()
+            .is_some_and(|(leader, _)| leader.points())
     }
 
     /// Whether an emitter lets particles out as loud as the music is.
@@ -271,7 +282,15 @@ impl Simulation {
             .emitters
             .iter()
             .any(|emitter| emitter.hearing.is_some())
-            || self.leader.as_ref().is_some_and(|leader| leader.listens())
+            || self
+                .system
+                .spawn
+                .turbulent
+                .is_some_and(|turbulent| turbulent.hearing.is_some())
+            || self
+                .leader
+                .as_ref()
+                .is_some_and(|(leader, _)| leader.listens())
     }
 
     /// The music is this loud now, left and right, in 64 bins from low to high.
@@ -281,7 +300,15 @@ impl Simulation {
                 *heard = hearing.share(spectrum);
             }
         }
-        if let Some(leader) = &mut self.leader {
+        if let Some(hearing) = self
+            .system
+            .spawn
+            .turbulent
+            .and_then(|turbulent| turbulent.hearing)
+        {
+            self.stirred = hearing.share(spectrum);
+        }
+        if let Some((leader, _)) = &mut self.leader {
             leader.hear(spectrum);
         }
     }
@@ -322,7 +349,7 @@ impl Simulation {
     /// The pointer moved to `at` in the system's own units.
     pub fn point(&mut self, at: [f32; 2]) {
         self.pointer = Some(at);
-        if let Some(leader) = &mut self.leader {
+        if let Some((leader, _)) = &mut self.leader {
             leader.point(at);
         }
     }
@@ -405,9 +432,10 @@ impl Simulation {
     /// each one born, and its rate from each while it lives. Unless they stay where they were
     /// let out, they move with the particle they came from and go when it does.
     fn follow_leader(&mut self) {
-        let Some(leader) = self.leader.as_mut() else {
+        let Some((leader, tie)) = self.leader.as_mut() else {
             return;
         };
+        let tie = *tie;
         leader.step();
         let leaders: Vec<(u64, [f32; 3])> = leader
             .particles
@@ -415,6 +443,43 @@ impl Simulation {
             .map(|particle| (particle.serial, particle.position))
             .collect();
         let mut following = std::mem::take(&mut self.following);
+        let emitters = self.system.emitters.len();
+        let burst = |simulation: &mut Simulation, at: [f32; 3], serial: Option<u64>| {
+            for emitter in 0..emitters {
+                for _ in 0..simulation.system.emitters[emitter].burst {
+                    simulation.emit(emitter, at, serial);
+                }
+            }
+        };
+        if tie != Tie::Follow {
+            // A burst where each was born, or where each that's gone was last; what comes out
+            // goes its own way.
+            let mut next = HashMap::with_capacity(leaders.len());
+            for (serial, at) in leaders {
+                if following.remove(&serial).is_none() && tie == Tie::Spawn {
+                    burst(self, at, None);
+                }
+                next.insert(
+                    serial,
+                    Follow {
+                        at,
+                        owed: Vec::new(),
+                    },
+                );
+            }
+            if tie == Tie::Death {
+                let mut gone: Vec<(u64, [f32; 3])> = following
+                    .iter()
+                    .map(|(serial, follow)| (*serial, follow.at))
+                    .collect();
+                gone.sort_by_key(|(serial, _)| *serial);
+                for (_, at) in gone {
+                    burst(self, at, None);
+                }
+            }
+            self.following = next;
+            return;
+        }
         let moved: HashMap<u64, [f32; 3]> = leaders
             .iter()
             .filter_map(|(serial, at)| {
@@ -422,8 +487,7 @@ impl Simulation {
                 Some((*serial, [0, 1, 2].map(|axis| at[axis] - before[axis])))
             })
             .collect();
-        let world = self.system.world;
-        if !world {
+        if !self.system.world {
             self.particles.retain_mut(|particle| {
                 let Some(serial) = particle.leader else {
                     return true;
@@ -437,17 +501,12 @@ impl Simulation {
                 true
             });
         }
-        let emitters = self.system.emitters.len();
         let mut next = HashMap::with_capacity(leaders.len());
         for (serial, at) in leaders {
             let mut owed = match following.remove(&serial) {
                 Some(follow) => follow.owed,
                 None => {
-                    for emitter in 0..emitters {
-                        for _ in 0..self.system.emitters[emitter].burst {
-                            self.emit(emitter, at, Some(serial));
-                        }
-                    }
+                    burst(self, at, Some(serial));
                     vec![0.0; emitters]
                 }
             };
@@ -546,7 +605,7 @@ impl Simulation {
     /// over when the particle is born.
     fn turbulent(&mut self, turbulent: Turbulent) -> [f32; 3] {
         let phase = self.uniform(turbulent.phase[0], turbulent.phase[1]);
-        let speed = self.uniform(turbulent.speed[0], turbulent.speed[1]);
+        let speed = self.uniform(turbulent.speed[0], turbulent.speed[1]) * self.stirred;
         let at = self.taken as f64 / RATE * f64::from(turbulent.timescale) + f64::from(phase);
         let swing = noise::noise(self.seed, [at, 0.5, 0.5]);
         let turn = turbulent.offset + turbulent.scale * std::f32::consts::PI * swing;
@@ -927,6 +986,29 @@ mod tests {
     }
 
     #[test]
+    fn a_turbulent_start_that_hears_sets_off_only_to_music() {
+        let listening = turbulent(
+            r#"{"name": "turbulentvelocityrandom", "audioprocessingmode": 3, "audioprocessingbounds": "0.5 1"}"#,
+            "",
+        );
+        let speeds = |simulation: &Simulation| -> f32 {
+            simulation
+                .particles()
+                .iter()
+                .map(|particle| particle.velocity().iter().map(|v| v * v).sum::<f32>())
+                .fold(0.0, f32::max)
+        };
+        let mut quiet = Simulation::new(Arc::clone(&listening), 4);
+        assert!(quiet.listens());
+        quiet.advance(0.5);
+        assert!(!quiet.particles().is_empty() && speeds(&quiet) == 0.0);
+        let mut loud = Simulation::new(listening, 4);
+        loud.hear(&[[1.0; 64]; 2]);
+        loud.advance(0.5);
+        assert!(speeds(&loud) > 100.0);
+    }
+
+    #[test]
     fn turbulence_pushes_particles_only_along_its_mask() {
         let still = r#"{"name": "velocityrandom", "min": "0 0 0", "max": "0 0 0"}"#;
         let mut simulation = Simulation::new(
@@ -1044,7 +1126,7 @@ mod tests {
         };
         let leader = Simulation::new(Arc::clone(&star), 3);
         let mut glow = Simulation::new(follower(0, r#""rate": 0, "instantaneous": 1"#), 4);
-        glow.follow(leader.twin());
+        glow.follow(leader.twin(), Tie::Follow);
         let run = |simulation: &mut Simulation, seconds: f32| {
             for _ in 0..(seconds * 2.0) as usize {
                 simulation.advance(0.5);
@@ -1053,17 +1135,17 @@ mod tests {
         run(&mut glow, 1.5);
         // The one star out so far carries its glow, 10 above it.
         assert_eq!(glow.particles().len(), 1);
-        let star_at = glow.leader.as_ref().unwrap().particles()[0].position;
+        let star_at = glow.leader.as_ref().unwrap().0.particles()[0].position;
         let glow_at = glow.particles()[0].position;
         assert!((glow_at[0] - star_at[0]).abs() < 1e-3 && star_at[0] > 40.0);
         assert!((glow_at[1] - star_at[1] - 10.0).abs() < 1e-3);
         // Its glow goes with it when it dies; a later star brings its own.
         run(&mut glow, 1.0);
-        let stars = glow.leader.as_ref().unwrap().particles().len();
+        let stars = glow.leader.as_ref().unwrap().0.particles().len();
         assert_eq!(glow.particles().len(), stars);
 
         let mut trail = Simulation::new(follower(1, r#""rate": 30"#), 4);
-        trail.follow(leader.twin());
+        trail.follow(leader.twin(), Tie::Follow);
         run(&mut trail, 2.0);
         // A trail stays where it was let out, spread along the way the star went.
         let xs: Vec<f32> = trail.particles().iter().map(|p| p.position[0]).collect();
@@ -1094,6 +1176,45 @@ mod tests {
                 particle.color
             );
         }
+    }
+
+    #[test]
+    fn children_burst_where_particles_are_born_and_where_they_die() {
+        // A star a second from the start, each living half a second, flying right.
+        let star = system(
+            r#"{"material": "m.json", "maxcount": 4,
+                "emitter": [{"name": "boxrandom", "rate": 1, "distancemax": "0 0 0"}],
+                "initializer": [{"name": "lifetimerandom", "min": 0.5, "max": 0.5},
+                                {"name": "velocityrandom", "min": "100 0 0", "max": "100 0 0"}],
+                "operator": [{"name": "movement", "gravity": "0 0 0"}],
+                "renderer": [{"name": "sprite"}]}"#,
+        );
+        let sparks = system(
+            r#"{"material": "m.json", "maxcount": 64,
+                "emitter": [{"name": "boxrandom", "rate": 0, "instantaneous": 3, "distancemax": "0 0 0"}],
+                "initializer": [{"name": "lifetimerandom", "min": 5, "max": 5}],
+                "operator": [{"name": "movement", "gravity": "0 0 0"}],
+                "renderer": [{"name": "sprite"}]}"#,
+        );
+        let leader = Simulation::new(star, 3);
+        let run = |tie: Tie, seconds: f32| {
+            let mut sparks = Simulation::new(Arc::clone(&sparks), 4);
+            sparks.follow(leader.twin(), tie);
+            for _ in 0..(seconds * 4.0) as usize {
+                sparks.advance(0.25);
+            }
+            sparks
+        };
+        // Born at a second and gone at a second and a half, fifty to the right.
+        assert_eq!(run(Tie::Spawn, 1.25).particles().len(), 3);
+        assert!(run(Tie::Death, 1.25).particles().is_empty());
+        let dead = run(Tie::Death, 1.75);
+        assert_eq!(dead.particles().len(), 3);
+        assert!(
+            dead.particles()
+                .iter()
+                .all(|spark| (spark.position[0] - 50.0).abs() < 2.0)
+        );
     }
 
     #[test]

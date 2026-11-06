@@ -45,8 +45,19 @@ pub struct Child {
     pub angles: [f32; 3],
     /// How many particles it may have, in place of its own file's count.
     pub max: Option<usize>,
-    /// It's let out from each of its parent's particles, `origin` away, as they move.
-    pub follow: bool,
+    /// Its parent's particles let it out, `origin` away from each, rather than its origin.
+    pub tie: Option<Tie>,
+}
+
+/// When a child system's parent's particles let it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tie {
+    /// From each while it lives, following it.
+    Follow,
+    /// Once when each is born.
+    Spawn,
+    /// Once when each dies, where it was.
+    Death,
 }
 
 impl System {
@@ -171,6 +182,8 @@ pub struct Turbulent {
     /// Added to each particle's place in the noise, which runs `timescale` a second.
     pub phase: [f32; 2],
     pub timescale: f32,
+    /// Its speed goes as loud as the music is, over these bands.
+    pub hearing: Option<super::audio::Hearing>,
 }
 
 impl Default for Spawn {
@@ -292,6 +305,11 @@ const RANGE: &[&str] = &["exponent", "max", "min"];
 pub const MOST: usize = 50_000;
 const CHANGE: &[&str] = &["endtime", "endvalue", "starttime", "startvalue"];
 const TURBULENT: &[&str] = &[
+    "audioprocessingbounds",
+    "audioprocessingexponent",
+    "audioprocessingfrequencyend",
+    "audioprocessingfrequencystart",
+    "audioprocessingmode",
     "forward",
     "offset",
     "phasemax",
@@ -357,16 +375,17 @@ impl System {
         let mut children = Vec::new();
         for child in list(root, "children")? {
             known(child, CHILD, "child system")?;
-            // Children let out when particles are born or die aren't drawn yet.
-            let follow = match text(child.get("type")) {
-                None | Some("static") => false,
-                Some("eventfollow") => true,
+            let tie = match text(child.get("type")) {
+                None | Some("static") => None,
+                Some("eventfollow") => Some(Tie::Follow),
+                Some("eventspawn") => Some(Tie::Spawn),
+                Some("eventdeath") => Some(Tie::Death),
                 Some(_) => return Err(refuse("child particle systems let out by particles")),
             };
             let scale = vector(child.get("scale"), [1.0; 3]);
             let angles = vector(child.get("angles"), [0.0; 3]);
             // One that follows particles sits in its parent's units, moved but not scaled.
-            if follow && (scale != [1.0; 3] || angles != [0.0; 3]) {
+            if tie.is_some() && (scale != [1.0; 3] || angles != [0.0; 3]) {
                 return Err(refuse("a scaled or turned child following particles"));
             }
             if number(child.get("probability")).is_some_and(|chance| chance < 1.0) {
@@ -385,7 +404,7 @@ impl System {
                 scale,
                 angles,
                 max: number(child.get("maxcount")).map(|max| max.clamp(0.0, MOST as f32) as usize),
-                follow,
+                tie,
             });
             if children.len() > 8 {
                 return Err(refuse("more than 8 child particle systems"));
@@ -509,6 +528,7 @@ fn initialize(value: &Value, spawn: &mut Spawn) -> Result<(), Error> {
             speed: [low, field("speedmax", 250.0).max(low)],
             phase: ordered(field("phasemin", 0.0), field("phasemax", 0.1)),
             timescale: field("timescale", 1.0),
+            hearing: super::audio::hearing(value, refuse)?,
         });
         return Ok(());
     }
@@ -880,7 +900,7 @@ mod tests {
             ),
             (
                 r#""starttime": 2"#,
-                r#""starttime": 2, "children": [{"name": "x", "type": "eventdeath"}]"#,
+                r#""starttime": 2, "children": [{"name": "x", "type": "eventcollide"}]"#,
                 "child particle",
             ),
             (

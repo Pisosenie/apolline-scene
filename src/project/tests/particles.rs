@@ -219,7 +219,7 @@ fn children_sit_from_their_parent_or_follow_its_particles() {
     assert_eq!(leaders, [None, None, Some(2), None]);
     write(
         "particles/snow.json",
-        &system(r#"[{"name":"particles/spark.json","type":"eventdeath"}]"#),
+        &system(r#"[{"name":"particles/spark.json","type":"eventcollide"}]"#),
     );
     let refused = Project::open(&folder, None)
         .unwrap()

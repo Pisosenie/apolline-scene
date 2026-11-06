@@ -271,6 +271,8 @@ impl<'a> Builder<'a> {
         let swarm = unsafe {
             super::swarm::Swarm::new(self.gl, system, frames, step.uv_max, ratio, seed, capacity)?
         };
+        let [ax, ay, _] = layer.image.angles;
+        swarm.tilt.set([ax, ay]);
         if let Some(behind) = layer.leader {
             let leader = renderer
                 .layers
@@ -279,8 +281,9 @@ impl<'a> Builder<'a> {
                 .and_then(|at| renderer.layers.get(at))
                 .filter(|leader| leader.object == layer.object)
                 .and_then(|leader| leader.swarm.as_ref());
-            match leader {
-                Some(leader) => swarm.follow(leader),
+            let tie = layer.child.as_ref().and_then(|child| child.tie);
+            match leader.zip(tie) {
+                Some((leader, tie)) => swarm.follow(leader, tie),
                 None => {
                     unsafe { swarm.delete(self.gl) };
                     return Err(Error::Format(
