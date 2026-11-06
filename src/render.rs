@@ -315,20 +315,19 @@ impl Renderer {
         }
     }
 
-    /// Whether an active GPU program, a particle system or a script needs time or frame delta
-    /// updates.
+    /// Whether the scene changes as time goes on: a program, particle system, sprite sheet or
+    /// script that needs time or frame delta updates. A scene that only follows the pointer
+    /// says so in `needs`, and changes when `follow` says it moved.
     pub fn animated(&self) -> bool {
         self.stage.is_some()
             || self
                 .layers
                 .iter()
                 .any(|layer| layer.swarm.is_some() || layer.sprite.is_some())
-            || self.programs.iter().any(|program| {
-                program
-                    .frame
-                    .as_ref()
-                    .is_some_and(material::Frame::animated)
-            })
+            || self
+                .programs
+                .iter()
+                .any(|program| program.frame.as_ref().is_some_and(material::Frame::timed))
     }
 
     /// Moves the parallax towards the pointer, -1..1 across the target with y up, taking the

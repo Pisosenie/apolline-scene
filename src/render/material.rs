@@ -215,6 +215,11 @@ impl Frame {
             || self.listens()
     }
 
+    /// Whether it changes as time goes on, whatever the pointer does.
+    pub(super) fn timed(&self) -> bool {
+        self.time.is_some() || self.delta.is_some() || self.listens()
+    }
+
     pub(super) fn points(&self) -> bool {
         self.pointer.is_some() || self.parallax.is_some()
     }
