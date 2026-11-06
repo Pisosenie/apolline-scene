@@ -239,6 +239,12 @@ pub(super) fn bind(
                 "vertex shaders that sample textures need another renderer",
             ));
         }
+        // How far textures were shrunk to save memory, which ours never are.
+        if kind == "float" && name == "g_TextureReductionScale" {
+            let whole = format!("const float {name} = 1.0;");
+            replacements.push((token.start, declaration[3].end, whole));
+            continue;
+        }
         if let Some(suffix) = name.strip_prefix("g_Texture") {
             let bytes = suffix.as_bytes();
             if bytes
@@ -379,11 +385,43 @@ pub(super) fn annotation(source: &str, end: usize, name: &str) -> Result<Value, 
         .map(str::trim)
         .filter(|text| text.starts_with('{'))
     {
-        Some(json) => {
-            serde_json::from_str(json).map_err(|error| fail(format!("uniform {name}: {error}")))
-        }
+        // The editor reads numbers written with leading zeros, `[0,01]`; JSON doesn't.
+        Some(json) => serde_json::from_str(json)
+            .or_else(|error| serde_json::from_str(&unpadded(json)).map_err(|_| error))
+            .map_err(|error| fail(format!("uniform {name}: {error}"))),
         None => Ok(Value::Null),
     }
+}
+
+/// `json` with the leading zeros of its numbers outside strings dropped.
+fn unpadded(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut previous = ' ';
+    let mut chars = json.chars().peekable();
+    while let Some(c) = chars.next() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                quoted = false;
+            }
+        } else if c == '"' {
+            quoted = true;
+        } else if c == '0'
+            && !previous.is_ascii_digit()
+            && previous != '.'
+            && chars.peek().is_some_and(char::is_ascii_digit)
+        {
+            continue;
+        }
+        out.push(c);
+        previous = c;
+    }
+    out
 }
 
 fn constant(kind: &str, value: &Value) -> Result<Constant, Error> {
@@ -526,5 +564,15 @@ mod tests {
             Constant::Int(3)
         );
         assert_eq!(Constant::Bool(true).with([0.0; 4]), Constant::Bool(false));
+    }
+
+    #[test]
+    fn padded_numbers_read_as_the_editor_reads_them() {
+        let source = "uniform float u_Speed; // {\"material\":\"Speed\",\"default\":1,\"range\":[0,01],\"label\":\"a \\\"0,01\\\" b\"}";
+        let end = source.find(';').unwrap() + 1;
+        let read = super::annotation(source, end, "u_Speed").unwrap();
+        assert_eq!(read["range"], serde_json::json!([0, 1]));
+        assert_eq!(read["label"], "a \"0,01\" b");
+        assert_eq!(super::unpadded("[0.05, 007, 10, 0]"), "[0.05, 7, 10, 0]");
     }
 }

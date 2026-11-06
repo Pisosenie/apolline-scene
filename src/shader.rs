@@ -850,6 +850,13 @@ mod tests {
         ] {
             assert!(prepare(declaration, json!({}), json!({})).is_err());
         }
+        // Textures are never shrunk here, so the reduction is none.
+        let reduced = prepare("uniform float g_TextureReductionScale;\nvoid main() { gl_FragColor = vec4(g_TextureReductionScale); }", json!({}), json!({})).unwrap();
+        assert!(
+            reduced
+                .source
+                .contains("const float g_TextureReductionScale = 1.0;")
+        );
     }
 
     #[test]
