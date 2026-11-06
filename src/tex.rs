@@ -176,12 +176,14 @@ impl Texture {
             }
             images.push(levels);
         }
+        // Frames that can't be read leave an animation without any, which only a sprite
+        // sheet minds.
         let frames = if flags & ANIMATED != 0 {
             let sizes: Vec<(u32, u32)> = images
                 .iter()
                 .map(|mips| (mips[0].width, mips[0].height))
                 .collect();
-            frames::read(&mut reader, &sizes)?
+            frames::read(&mut reader, &sizes).unwrap_or_default()
         } else {
             Vec::new()
         };

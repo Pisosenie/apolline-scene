@@ -891,6 +891,35 @@ fn a_stock_image_pass_plays_a_sprite_sheets_frames() {
     assert_eq!(layer.texture.frames.len(), 2);
     assert_eq!(layer.texture.frame_size(), Some((2, 2)));
     assert!(project.prepare_still().is_err());
+    // The same sheet on a plain layer is an animation it can't play, whichever comes first.
+    std::fs::write(
+        folder.join("plain.json"),
+        r#"{"material":"plain-material.json"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("plain-material.json"),
+        r#"{"passes":[{"shader":"genericimage2","textures":["sheet"]}]}"#,
+    )
+    .unwrap();
+    for objects in [
+        r#"[{"name":"plain","image":"plain.json"},{"name":"sprite","image":"model.json"}]"#,
+        r#"[{"name":"sprite","image":"model.json"},{"name":"plain","image":"plain.json"}]"#,
+    ] {
+        std::fs::write(
+            folder.join("scene.json"),
+            format!(r#"{{"general":{{"orthogonalprojection":{{"width":10,"height":10}}}},"objects":{objects}}}"#),
+        )
+        .unwrap();
+        let refused = project.prepare().err().unwrap().to_string();
+        assert!(
+            refused.starts_with("plain: ")
+                && refused.contains("animated")
+                && !refused.contains("sprite"),
+            "{objects}: {refused}"
+        );
+    }
+    std::fs::write(folder.join("scene.json"), r#"{"general":{"orthogonalprojection":{"width":10,"height":10}},"objects":[{"image":"model.json"}]}"#).unwrap();
     // Asked to play frames its texture hasn't.
     std::fs::write(folder.join("materials/sheet.tex"), still).unwrap();
     let refused = project.prepare().err().unwrap().to_string();

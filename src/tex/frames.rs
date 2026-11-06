@@ -1,8 +1,8 @@
 //! `TEXS`: an animated texture's frames, after its images. Each frame names its image, how long
-//! it shows, and where it is in that image: the corner of the box it fills, and its top and left
-//! sides, which may run backwards when a frame lies turned in the sheet. The first version stores
-//! the places as whole pixels, the later ones as floats, and the third puts the frames' size in
-//! front of them.
+//! it shows, and where it is in that image: its own top left corner, and its top and left sides
+//! from there, which run up or left when a frame lies turned in the sheet. The first version
+//! stores the places as whole pixels, the later ones as floats, and the third puts the frames'
+//! size in front of them.
 
 use crate::{Error, Reader};
 
@@ -71,16 +71,10 @@ pub(super) fn read(reader: &mut Reader, sizes: &[(u32, u32)]) -> Result<Vec<Fram
         }
         let (width, height) = sizes[image];
         let share = |x: f32, y: f32| [x / width as f32, y / height as f32];
-        // A side running backwards starts at the far edge of the box.
-        let start =
-            |box_corner: f32, across: f32, down: f32| box_corner - across.min(0.0) - down.min(0.0);
         frames.push(Frame {
             image,
             seconds,
-            corner: share(
-                start(place[0], place[2], place[4]),
-                start(place[1], place[3], place[5]),
-            ),
+            corner: share(place[0], place[1]),
             across: share(place[2], place[3]),
             down: share(place[4], place[5]),
             size: (place[2].hypot(place[3]), place[4].hypot(place[5])),
@@ -139,8 +133,8 @@ mod tests {
     fn frames_are_read_in_every_version_as_shares_of_their_image() {
         let records = [
             (0, 0.25, [0.0, 0.0, 2.0, 0.0, 0.0, 2.0]),
-            // Turned in the sheet: its top runs up from the box's bottom left corner.
-            (0, 0.5, [2.0, 0.0, 0.0, -2.0, 2.0, 0.0]),
+            // Turned in the sheet: its top runs up from its corner at the bottom left.
+            (0, 0.5, [2.0, 2.0, 0.0, -2.0, 2.0, 0.0]),
         ];
         for (tag, size, whole) in [
             ("TEXS0001", None, true),
@@ -167,23 +161,19 @@ mod tests {
     }
 
     #[test]
-    fn broken_frames_are_errors() {
+    fn broken_frames_leave_an_animation_without_any() {
         let one = |image: i32, seconds: f32| {
             frames("TEXS0002", None, &[(image, seconds, [0.0; 6])], false)
         };
-        for (bytes, why) in [
-            (one(1, 0.1), "an image the texture hasn't"),
-            (one(0, f32::NAN), "broken time"),
-            (one(0, -1.0), "broken time"),
-            (
-                frames("TEXS0009", None, &[], false),
-                "unsupported texture frames",
-            ),
-            (frames("TEXS0002", None, &[], false), "1–65536 frames"),
-            (one(0, 0.1)[..20].to_vec(), "cut short"),
+        for bytes in [
+            one(1, 0.1),
+            one(0, f32::NAN),
+            one(0, -1.0),
+            frames("TEXS0009", None, &[], false),
+            frames("TEXS0002", None, &[], false),
+            one(0, 0.1)[..20].to_vec(),
         ] {
-            let error = Texture::parse(&sheet(&bytes)).err().unwrap().to_string();
-            assert!(error.contains(why), "{why}: {error}");
+            assert!(Texture::parse(&sheet(&bytes)).unwrap().frames.is_empty());
         }
     }
 }

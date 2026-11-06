@@ -5,8 +5,8 @@ use super::Drawn;
 
 pub(super) struct Sprite {
     /// Each frame's image, where it is in it as `[corner, across, down]`, and when in the loop
-    /// it ends, in seconds.
-    frames: Vec<(glow::Texture, [f32; 6], f32)>,
+    /// it ends, in seconds, added up finely enough that the loop's end is where it says.
+    frames: Vec<(glow::Texture, [f32; 6], f64)>,
     /// The frame drawn last.
     shown: Option<usize>,
 }
@@ -18,7 +18,8 @@ impl Sprite {
         let frames = frames
             .iter()
             .map(|frame| {
-                end += frame.seconds;
+                // Times are written to a few decimals; as floats a tenth is a little over.
+                end += (f64::from(frame.seconds) * 1e6).round() / 1e6;
                 let place = [
                     frame.corner[0],
                     frame.corner[1],
@@ -42,7 +43,7 @@ impl Sprite {
         if total <= 0.0 || !time.is_finite() {
             return 0;
         }
-        let into = time.rem_euclid(total);
+        let into = f64::from(time).rem_euclid(total);
         self.frames
             .partition_point(|frame| frame.2 <= into)
             .min(self.frames.len() - 1)
@@ -104,5 +105,8 @@ mod tests {
         assert_eq!(shown, [0, 0, 1, 1, 2, 2, 0, 0, 2]);
         let still = Sprite::new(&[frame(0, 0.0, 0.0), frame(0, 0.0, 0.5)], &[texture]);
         assert_eq!(still.at(3.0), 0);
+        // Ten tenths make a second: a second in, the loop is back at its start.
+        let tenths = Sprite::new(&vec![frame(0, 0.1, 0.0); 10], &[texture]);
+        assert_eq!((tenths.at(1.0), tenths.at(0.95)), (0, 9));
     }
 }

@@ -49,6 +49,8 @@ const TARGET_SIDE: u32 = 8192;
 pub(super) struct Builder<'a> {
     gl: &'a glow::Context,
     textures: HashMap<*const Texture, (glow::Texture, [f32; 2])>,
+    /// A sprite sheet's images after its first, uploaded once however many layers play it.
+    sheets: HashMap<*const Texture, Vec<glow::Texture>>,
     variants: HashMap<(Option<&'a str>, &'a str), usize>,
     /// Our particle program, once a layer needs it.
     particles: Option<usize>,
@@ -61,6 +63,7 @@ impl<'a> Builder<'a> {
         Builder {
             gl,
             textures: HashMap::new(),
+            sheets: HashMap::new(),
             variants: HashMap::new(),
             particles: None,
             source_bytes: 0,
@@ -118,10 +121,17 @@ impl<'a> Builder<'a> {
             bytes: super::words::bytes(&layer.texture, !layer.effects.is_empty()),
         });
         let sprite = if layer.sprite {
-            let mut images = vec![inputs[0].texture];
-            for image in 1..layer.texture.images.len() {
-                images.push(unsafe { self.image(renderer, &layer.texture, image)? });
+            let key = Arc::as_ptr(&layer.texture);
+            if !self.sheets.contains_key(&key) {
+                let mut rest = Vec::new();
+                for image in 1..layer.texture.images.len() {
+                    rest.push(unsafe { self.image(renderer, &layer.texture, image)? });
+                }
+                self.sheets.insert(key, rest);
             }
+            let images: Vec<glow::Texture> = std::iter::once(inputs[0].texture)
+                .chain(self.sheets[&key].iter().copied())
+                .collect();
             Some(super::sprite::Sprite::new(&layer.texture.frames, &images))
         } else {
             None

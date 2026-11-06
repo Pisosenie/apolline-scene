@@ -3,7 +3,8 @@ use crate::shader::{Fragment, Template};
 
 #[derive(Default)]
 pub(super) struct Resources {
-    pub textures: HashMap<String, Result<Arc<Texture>, String>>,
+    /// Textures by file, and by whether they were read as stills, which refuses animations.
+    pub textures: HashMap<(String, bool), Result<Arc<Texture>, String>>,
     materials: HashMap<String, Result<Material, String>>,
     source_bytes: usize,
     custom_materials: usize,
@@ -31,7 +32,7 @@ impl Project {
         still: bool,
     ) -> Result<Arc<Texture>, Error> {
         let file = texture_file(name)?;
-        if let Some(cached) = resources.textures.get(&file) {
+        if let Some(cached) = resources.textures.get(&(file.clone(), still)) {
             return cached
                 .as_ref()
                 .map(Arc::clone)
@@ -63,7 +64,7 @@ impl Project {
             .as_ref()
             .map(Arc::clone)
             .map_err(|message| Error::Format(message.clone()));
-        resources.textures.insert(file, result);
+        resources.textures.insert((file, still), result);
         returned
     }
 

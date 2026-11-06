@@ -245,7 +245,7 @@ if args.sprite_demo:
     pixels = b"".join(bytes(pixel) for row in sheet for pixel in row)
     frames = b"TEXS0002\0" + struct.pack("<I", 3)
     frames += struct.pack("<if6f", 0, 0.5, 0, 0, 16, 0, 0, 16)
-    frames += struct.pack("<if6f", 0, 0.5, 17, 0, 0, -16, 16, 0)
+    frames += struct.pack("<if6f", 0, 0.5, 17, 16, 0, -16, 16, 0)
     frames += struct.pack("<if6f", 0, 1.0, 34, 0, 16, 0, 0, 16)
     files["materials/sun.tex"] = tex(0, 50, 16, pixels, flags=2 | 4) + frames
     files["materials/sun.json"] = b'{"passes": [{"shader": "genericimage2", "textures": ["sun"], "blending": "translucent", "combos": {"VERSION": 2, "SPRITESHEET": 1}}]}'
