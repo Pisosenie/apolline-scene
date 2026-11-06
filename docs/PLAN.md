@@ -125,9 +125,13 @@ documentation names them, seeded), then parsing once the survey gives the JSON k
 one instanced draw per system; control points, children, trails and audio after. Static
 children are drawn: each is one more system of the same object, let out once and drawn after
 its parent, its origin in the parent's units and turned with it, three generations deep at
-most. Children let out per particle (`eventspawn`, `eventfollow`, `eventdeath`) are refused;
-none of the near scenes was held by static children alone, so their placement hasn't been
-checked against Wallpaper Engine yet. Turbulence is drawn both ways the documentation gives it: a
+most. A child following particles (`eventfollow`) runs a twin of its parent's simulation (the
+same file and seed, so the same particles) and lets its own out from each of the twin's: a
+burst when one is born, its rate while it lives, `origin` away. Without the worldspace flag its
+particles move with the one they came from and go when it dies (a shooting star's glow); with
+it they stay where they were let out (a firefly's trail). The child's `maxcount` bounds all of
+them together, and its own `starttime` gives way to its parent's. Children let out when
+particles are born or die (`eventspawn`, `eventdeath`) are still refused. Turbulence is drawn both ways the documentation gives it: a
 turbulent start (`turbulentvelocityrandom`) turns its forward direction by `offset` radians
 (stock leaves fall with 3) and by noise over when each particle is born, up to `scale` half
 turns; the `turbulence` operator pushes each particle every second by noise over its place

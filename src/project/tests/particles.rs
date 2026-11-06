@@ -151,7 +151,7 @@ fn worldspace_particles_draw_on_a_layer_that_stays_put() {
 }
 
 #[test]
-fn static_children_follow_their_parent_and_event_children_are_refused() {
+fn children_sit_from_their_parent_or_follow_its_particles() {
     let folder = scene(
         "particle-children",
         r#"{"passes":[{"textures":["particle/flake"]}]}"#,
@@ -203,6 +203,20 @@ fn static_children_follow_their_parent_and_event_children_are_refused() {
         .unwrap()
         .to_string();
     assert!(refused.contains("generations deep"), "{refused}");
+    // A child following the particles knows how far back its parent's layer is.
+    write("particles/dust.json", &system("[]"));
+    write(
+        "particles/snow.json",
+        &system(
+            r#"[{"name":"particles/dust.json"},{"name":"particles/spark.json","type":"eventfollow"}]"#,
+        ),
+    );
+    let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
+    let leaders: Vec<_> = prepared.layers[1..5]
+        .iter()
+        .map(|layer| layer.leader)
+        .collect();
+    assert_eq!(leaders, [None, None, Some(2), None]);
     write(
         "particles/snow.json",
         &system(r#"[{"name":"particles/spark.json","type":"eventdeath"}]"#),
@@ -213,6 +227,6 @@ fn static_children_follow_their_parent_and_event_children_are_refused() {
         .err()
         .unwrap()
         .to_string();
-    assert!(refused.contains("tied to particles"), "{refused}");
+    assert!(refused.contains("let out by particles"), "{refused}");
     std::fs::remove_dir_all(folder).unwrap();
 }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::noise;
@@ -26,6 +27,10 @@ pub struct Particle {
     pick: f32,
     /// What its oscillations and turbulence draw their own numbers from.
     seed: u64,
+    /// Which of the system's particles it is, counting from the start.
+    serial: u64,
+    /// The parent's particle it was let out from, for a system that follows them.
+    leader: Option<u64>,
 }
 
 impl Particle {
@@ -79,6 +84,18 @@ pub struct Simulation {
     most: usize,
     /// What share of its rate each emitter lets out at how loud the music is now.
     heard: Vec<f32>,
+    /// Particles let out so far, which numbers the next.
+    serial: u64,
+    /// The parent system run alongside, for one let out from each of its particles.
+    leader: Option<Box<Simulation>>,
+    /// Where each of the parent's particles was a step ago and what its emitters owe, by its
+    /// serial.
+    following: HashMap<u64, Follow>,
+}
+
+struct Follow {
+    at: [f32; 3],
+    owed: Vec<f32>,
 }
 
 /// How much more of each instance override than the system started with.
@@ -131,31 +148,78 @@ impl Simulation {
             pointer: None,
             tuning: Tuning::default(),
             most: usize::MAX,
+            serial: 0,
+            leader: None,
+            following: HashMap::new(),
         };
         simulation.restart();
         simulation
     }
 
+    /// The same system started afresh, as it would run beside another.
+    pub fn twin(&self) -> Simulation {
+        let mut twin = Simulation::new(Arc::clone(&self.system), self.seed);
+        twin.most = self.most;
+        if let Some(leader) = &self.leader {
+            twin.follow(leader.twin());
+        }
+        twin
+    }
+
+    /// Lets its particles out from each of `leader`'s instead of its own origin, running it
+    /// alongside; started again from there.
+    pub fn follow(&mut self, leader: Simulation) {
+        self.leader = Some(Box::new(leader));
+        self.restart();
+    }
+
     /// Back to how it stood when the scene started.
     pub fn restart(&mut self) {
+        self.reset();
+        // A follower warms up as long as the system it follows does, which it moves with.
+        let warmup = (f64::from(self.warmup()) * RATE).round() as u64;
+        for _ in 0..warmup {
+            self.step();
+        }
+    }
+
+    /// Back to the start, before any warming up.
+    fn reset(&mut self) {
         self.random = self.seed ^ 0x9E37_79B9_7F4A_7C15;
         self.particles.clear();
         self.owed.iter_mut().for_each(|owed| *owed = 0.0);
         self.elapsed = 0.0;
         self.steps = 0;
         self.taken = 0;
+        self.serial = 0;
+        self.following.clear();
+        if let Some(leader) = &mut self.leader {
+            leader.reset();
+            return;
+        }
         for at in 0..self.system.emitters.len() {
             for _ in 0..self.system.emitters[at].burst {
-                if self.particles.len() < self.room() {
-                    let particle = self.spawn(at);
-                    self.particles.push(particle);
-                }
+                self.emit(at, [0.0; 3], None);
             }
         }
-        let warmup = (f64::from(self.system.warmup) * RATE).round() as u64;
-        for _ in 0..warmup {
-            self.step();
+    }
+
+    fn warmup(&self) -> f32 {
+        self.leader
+            .as_ref()
+            .map_or(self.system.warmup, |leader| leader.warmup())
+    }
+
+    /// Lets a particle out of emitter `at`, `from` away from where it would be, if there's
+    /// room.
+    fn emit(&mut self, at: usize, from: [f32; 3], leader: Option<u64>) {
+        if self.particles.len() >= self.room() {
+            return;
         }
+        let mut particle = self.spawn(at);
+        particle.position = [0, 1, 2].map(|axis| particle.position[axis] + from[axis]);
+        particle.leader = leader;
+        self.particles.push(particle);
     }
 
     /// Moves on by `seconds`, in whole steps, carrying over what's left.
@@ -193,7 +257,7 @@ impl Simulation {
         self.system.operators.iter().any(|operator| match operator {
             Operator::Attract { control, .. } => self.system.controls[*control].pointer,
             _ => false,
-        })
+        }) || self.leader.as_ref().is_some_and(|leader| leader.points())
     }
 
     /// Whether an emitter lets particles out as loud as the music is.
@@ -202,6 +266,7 @@ impl Simulation {
             .emitters
             .iter()
             .any(|emitter| emitter.hearing.is_some())
+            || self.leader.as_ref().is_some_and(|leader| leader.listens())
     }
 
     /// The music is this loud now, left and right, in 64 bins from low to high.
@@ -210,6 +275,9 @@ impl Simulation {
             if let Some(hearing) = emitter.hearing {
                 *heard = hearing.share(spectrum);
             }
+        }
+        if let Some(leader) = &mut self.leader {
+            leader.hear(spectrum);
         }
     }
 
@@ -249,6 +317,9 @@ impl Simulation {
     /// The pointer moved to `at` in the system's own units.
     pub fn point(&mut self, at: [f32; 2]) {
         self.pointer = Some(at);
+        if let Some(leader) = &mut self.leader {
+            leader.point(at);
+        }
     }
 
     /// How its particles are drawn.
@@ -282,15 +353,13 @@ impl Simulation {
         }
         self.particles
             .retain(|particle| particle.age < particle.life);
-        for (at, emitter) in system.emitters.iter().enumerate() {
-            self.owed[at] += emitter.rate * self.tuning.rate * self.heard[at] * STEP;
-            // Whatever it owes past the room there is goes unspent, however fast it asks.
-            let due = self.owed[at].floor();
-            self.owed[at] -= due;
-            let free = self.room().saturating_sub(self.particles.len());
-            for _ in 0..(due as usize).min(free) {
-                let particle = self.spawn(at);
-                self.particles.push(particle);
+        if self.leader.is_some() {
+            self.follow_leader();
+        } else {
+            for at in 0..system.emitters.len() {
+                let mut owed = self.owed[at];
+                self.emit_owed(at, &mut owed, [0.0; 3], None);
+                self.owed[at] = owed;
             }
         }
         let controls = system
@@ -312,6 +381,77 @@ impl Simulation {
             live(particle, &system.operators, world);
         }
         self.taken += 1;
+    }
+
+    /// Lets out what emitter `at` owes this step, `from` away; whatever it owes past the room
+    /// there is goes unspent, however fast it asks.
+    fn emit_owed(&mut self, at: usize, owed: &mut f32, from: [f32; 3], leader: Option<u64>) {
+        let emitter = &self.system.emitters[at];
+        *owed += emitter.rate * self.tuning.rate * self.heard[at] * STEP;
+        let due = owed.floor();
+        *owed -= due;
+        let free = self.room().saturating_sub(self.particles.len());
+        for _ in 0..(due as usize).min(free) {
+            self.emit(at, from, leader);
+        }
+    }
+
+    /// Steps the system it follows, then lets particles out from each of its: a burst from
+    /// each one born, and its rate from each while it lives. Unless they stay where they were
+    /// let out, they move with the particle they came from and go when it does.
+    fn follow_leader(&mut self) {
+        let Some(leader) = self.leader.as_mut() else {
+            return;
+        };
+        leader.step();
+        let leaders: Vec<(u64, [f32; 3])> = leader
+            .particles
+            .iter()
+            .map(|particle| (particle.serial, particle.position))
+            .collect();
+        let mut following = std::mem::take(&mut self.following);
+        let moved: HashMap<u64, [f32; 3]> = leaders
+            .iter()
+            .filter_map(|(serial, at)| {
+                let before = following.get(serial)?.at;
+                Some((*serial, [0, 1, 2].map(|axis| at[axis] - before[axis])))
+            })
+            .collect();
+        let world = self.system.world;
+        if !world {
+            self.particles.retain_mut(|particle| {
+                let Some(serial) = particle.leader else {
+                    return true;
+                };
+                let Some(by) = moved.get(&serial) else {
+                    return false;
+                };
+                for (position, by) in particle.position.iter_mut().zip(by) {
+                    *position += by;
+                }
+                true
+            });
+        }
+        let emitters = self.system.emitters.len();
+        let mut next = HashMap::with_capacity(leaders.len());
+        for (serial, at) in leaders {
+            let mut owed = match following.remove(&serial) {
+                Some(follow) => follow.owed,
+                None => {
+                    for emitter in 0..emitters {
+                        for _ in 0..self.system.emitters[emitter].burst {
+                            self.emit(emitter, at, Some(serial));
+                        }
+                    }
+                    vec![0.0; emitters]
+                }
+            };
+            for (emitter, owed) in owed.iter_mut().enumerate() {
+                self.emit_owed(emitter, owed, at, Some(serial));
+            }
+            next.insert(serial, Follow { at, owed });
+        }
+        self.following = next;
     }
 
     fn spawn(&mut self, emitter: usize) -> Particle {
@@ -370,6 +510,11 @@ impl Simulation {
             velocity,
             spin: self.within(spawn.spin),
             age: 0.0,
+            serial: {
+                self.serial += 1;
+                self.serial
+            },
+            leader: None,
             life: (self.between(spawn.life) * tuning.life).max(0.001),
             born,
             // Drawn only for systems that use it, so the rest keep their random sequence.
@@ -862,6 +1007,61 @@ mod tests {
             let along = out[0] * particle.velocity[0] + out[1] * (particle.velocity[1] - 100.0);
             assert!(along > 0.0, "a particle flew inward");
         }
+    }
+
+    #[test]
+    fn followers_come_out_of_each_particle_and_glow_with_it_or_trail_behind() {
+        // One particle a second, flying right at 100 a second for two seconds.
+        let star = system(
+            r#"{"material": "m.json", "maxcount": 4,
+                "emitter": [{"name": "boxrandom", "rate": 1, "distancemax": "0 0 0"}],
+                "initializer": [{"name": "lifetimerandom", "min": 2, "max": 2},
+                                {"name": "velocityrandom", "min": "100 0 0", "max": "100 0 0"}],
+                "operator": [{"name": "movement", "gravity": "0 0 0"}],
+                "renderer": [{"name": "sprite"}]}"#,
+        );
+        let follower = |flags: u32, emitter: &str| {
+            system(&format!(
+                r#"{{"material": "m.json", "maxcount": 64, "flags": {flags},
+                    "emitter": [{{"name": "boxrandom", "origin": "0 10 0", "distancemax": "0 0 0",
+                                  {emitter}}}],
+                    "initializer": [{{"name": "lifetimerandom", "min": 5, "max": 5}}],
+                    "operator": [{{"name": "movement", "gravity": "0 0 0"}}],
+                    "renderer": [{{"name": "sprite"}}]}}"#
+            ))
+        };
+        let leader = Simulation::new(Arc::clone(&star), 3);
+        let mut glow = Simulation::new(follower(0, r#""rate": 0, "instantaneous": 1"#), 4);
+        glow.follow(leader.twin());
+        let run = |simulation: &mut Simulation, seconds: f32| {
+            for _ in 0..(seconds * 2.0) as usize {
+                simulation.advance(0.5);
+            }
+        };
+        run(&mut glow, 1.5);
+        // The one star out so far carries its glow, 10 above it.
+        assert_eq!(glow.particles().len(), 1);
+        let star_at = glow.leader.as_ref().unwrap().particles()[0].position;
+        let glow_at = glow.particles()[0].position;
+        assert!((glow_at[0] - star_at[0]).abs() < 1e-3 && star_at[0] > 40.0);
+        assert!((glow_at[1] - star_at[1] - 10.0).abs() < 1e-3);
+        // Its glow goes with it when it dies; a later star brings its own.
+        run(&mut glow, 1.0);
+        let stars = glow.leader.as_ref().unwrap().particles().len();
+        assert_eq!(glow.particles().len(), stars);
+
+        let mut trail = Simulation::new(follower(1, r#""rate": 30"#), 4);
+        trail.follow(leader.twin());
+        run(&mut trail, 2.0);
+        // A trail stays where it was let out, spread along the way the star went.
+        let xs: Vec<f32> = trail.particles().iter().map(|p| p.position[0]).collect();
+        assert!(xs.len() > 20);
+        assert!(xs.iter().cloned().fold(f32::MAX, f32::min) < 10.0);
+        assert!(xs.iter().cloned().fold(f32::MIN, f32::max) > 80.0);
+        // The same moment twice is the same particles.
+        let before = trail.particles().to_vec();
+        trail.seek(2.0);
+        assert_eq!(trail.particles(), &before[..]);
     }
 
     #[test]

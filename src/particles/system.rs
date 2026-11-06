@@ -33,7 +33,8 @@ pub struct System {
     pub controls: [Control; CONTROLS],
 }
 
-/// A child system let out once at its parent's origin, moved, scaled and turned from it.
+/// A child system let out once at its parent's origin, moved, scaled and turned from it, or
+/// let out with each of its parent's particles and following it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Child {
     /// Its own file, `particles/….json`.
@@ -43,6 +44,8 @@ pub struct Child {
     pub angles: [f32; 3],
     /// How many particles it may have, in place of its own file's count.
     pub max: Option<usize>,
+    /// It's let out from each of its parent's particles, `origin` away, as they move.
+    pub follow: bool,
 }
 
 impl System {
@@ -351,9 +354,17 @@ impl System {
         let mut children = Vec::new();
         for child in list(root, "children")? {
             known(child, CHILD, "child system")?;
-            // Children tied to their parent's particles are let out with each of them.
-            if !matches!(text(child.get("type")), None | Some("static")) {
-                return Err(refuse("child particle systems tied to particles"));
+            // Children let out when particles are born or die aren't drawn yet.
+            let follow = match text(child.get("type")) {
+                None | Some("static") => false,
+                Some("eventfollow") => true,
+                Some(_) => return Err(refuse("child particle systems let out by particles")),
+            };
+            let scale = vector(child.get("scale"), [1.0; 3]);
+            let angles = vector(child.get("angles"), [0.0; 3]);
+            // One that follows particles sits in its parent's units, moved but not scaled.
+            if follow && (scale != [1.0; 3] || angles != [0.0; 3]) {
+                return Err(refuse("a scaled or turned child following particles"));
             }
             if number(child.get("probability")).is_some_and(|chance| chance < 1.0) {
                 return Err(refuse("child particle systems let out by chance"));
@@ -368,9 +379,10 @@ impl System {
             children.push(Child {
                 file: file.to_owned(),
                 origin: vector(child.get("origin"), [0.0; 3]),
-                scale: vector(child.get("scale"), [1.0; 3]),
-                angles: vector(child.get("angles"), [0.0; 3]),
+                scale,
+                angles,
                 max: number(child.get("maxcount")).map(|max| max.clamp(0.0, MOST as f32) as usize),
+                follow,
             });
             if children.len() > 8 {
                 return Err(refuse("more than 8 child particle systems"));

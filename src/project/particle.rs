@@ -39,8 +39,11 @@ impl Project {
                     ..placed.clone()
                 };
                 let layer = self.particle_layer(&file, child.max, resources, remaining)?;
+                // The family's layers are drawn in this order, so its parent is this far back.
+                let behind = family.len() + born.len() - at;
                 born.push(Layer {
                     child: Some(within(parent.child.as_ref(), child)),
+                    leader: child.follow.then_some(behind),
                     ..layer
                 });
             }
@@ -197,6 +200,7 @@ impl Project {
             compose: false,
             particles: Some(Arc::new(system)),
             child: None,
+            leader: None,
             text: None,
         })
     }
@@ -223,6 +227,7 @@ fn within(parent: Option<&Child>, child: &Child) -> Child {
         scale: [0, 1, 2].map(|axis| parent.scale[axis] * child.scale[axis]),
         angles: [0, 1, 2].map(|axis| parent.angles[axis] + child.angles[axis]),
         max: child.max,
+        follow: child.follow,
     }
 }
 

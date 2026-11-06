@@ -153,6 +153,12 @@ impl Swarm {
         capacity.max(1) * FLOATS * 4
     }
 
+    /// Lets its particles out from each of `leader`'s, running a twin of it alongside.
+    pub fn follow(&self, leader: &Swarm) {
+        let twin = leader.simulation.borrow().twin();
+        self.simulation.borrow_mut().follow(twin);
+    }
+
     /// Scales one of the system's instance overrides by `factor` from where its file leaves it.
     pub fn tune(&self, key: &str, factor: f32) {
         self.simulation.borrow_mut().tune(key, factor);

@@ -69,6 +69,8 @@ pub struct Layer {
     pub particles: Option<Arc<crate::particles::System>>,
     /// Where a child particle system sits from its object's place; its file is the parent's.
     pub child: Option<crate::particles::Child>,
+    /// For a system following another's particles, how many layers before it that one is.
+    pub leader: Option<usize>,
     /// How a text layer's words are drawn, for when its scripts change them.
     pub text: Option<Arc<crate::text::Lettering>>,
 }
@@ -505,6 +507,7 @@ impl Project {
             compose: resolved.compose,
             particles: None,
             child: None,
+            leader: None,
             text: None,
         })
     }

@@ -60,6 +60,7 @@ impl Project {
             compose: false,
             particles: None,
             child: None,
+            leader: None,
             text: Some(Arc::new(lettering)),
         })
     }
