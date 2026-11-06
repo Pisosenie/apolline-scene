@@ -240,6 +240,7 @@ impl Project {
                 .any(|fragment| fragment.animated || fragment.reads.audio)
                 || layer.particles.is_some()
         }) || !prepared.scene.scripts.is_empty()
+            || !prepared.scene.animations.is_empty()
         {
             return Err(Error::Format(
                 "time-dependent materials need animated scene playback".into(),

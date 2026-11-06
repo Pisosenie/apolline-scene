@@ -4,11 +4,14 @@
 
 mod check;
 mod effects;
+pub(crate) mod timeline;
 
 use serde_json::Value;
 
 pub use check::Missing;
+pub(crate) use effects::Driven;
 pub use effects::Effect;
+pub use timeline::{Key, Mode, Timeline};
 
 use crate::Error;
 use crate::value::{flag, number, plain, text, vector};
@@ -23,6 +26,10 @@ pub struct Scene {
     pub objects: Vec<Object>,
     /// Scripts on objects' places and looks and on their effects, in the order they run.
     pub scripts: Vec<Script>,
+    /// Timelines on objects' places and looks and on their effects' values.
+    pub animations: Vec<Animated>,
+    /// The effect values scripts or timelines drive, each once.
+    pub(crate) driven: Vec<Driven>,
     /// Each object's own place and look, before its parents move it, and what it hangs from.
     pub(crate) locals: Vec<Local>,
     pub(crate) tree: Vec<Node>,
@@ -41,6 +48,23 @@ pub struct Script {
     /// The scene's values for the script's own properties, by name.
     pub properties: serde_json::Map<String, Value>,
 }
+
+/// A timeline playing on one of an object's values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Animated {
+    pub object: usize,
+    /// An object's `origin`, `scale`, `angles`, `color`, `alpha` or `brightness`, or a value
+    /// one of its effects gives a shader.
+    pub target: Target,
+    pub timeline: Timeline,
+}
+
+/// The most timelines a scene may play.
+const MOST_TIMELINES: usize = 4096;
+
+/// The object values a timeline can be on.
+pub(crate) const ANIMATABLE: &[&str] =
+    &["origin", "scale", "angles", "color", "alpha", "brightness"];
 
 /// The value a script is on.
 #[derive(Clone, Debug, PartialEq)]
@@ -241,12 +265,17 @@ impl Scene {
             hang(objects, &pose(&locals, &tree)),
             effects::looked_up(raw),
         );
+        let scripts = scripts(raw, &objects);
+        let animations = animations(raw, &objects);
+        let crowded = animations.len() > MOST_TIMELINES;
         Ok(Scene {
             size: size.unwrap_or(DEFAULT_SIZE),
             perspective: size.is_none(),
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
-            scripts: scripts(raw, &objects),
+            driven: effects::driven(&scripts, &animations),
+            scripts,
+            animations,
             objects,
             locals,
             tree,
@@ -254,7 +283,13 @@ impl Scene {
                 .iter()
                 .map(|value| text(value.get("name")).unwrap_or_default().to_owned())
                 .collect(),
-            refused: check::refusals(root),
+            refused: {
+                let mut refused = check::refusals(root);
+                if crowded {
+                    refused.push(Missing::Setting("more than 4096 timelines"));
+                }
+                refused
+            },
         })
     }
 
@@ -520,6 +555,35 @@ fn hang(mut objects: Vec<Object>, poses: &[Pose]) -> Vec<Object> {
         }
     }
     objects
+}
+
+/// The timelines on drawn objects' values and on their effects. Those that can't be played
+/// are refused by the checks.
+fn animations(raw: &[Value], objects: &[Object]) -> Vec<Animated> {
+    let mut found = Vec::new();
+    for (at, (value, object)) in raw.iter().zip(objects).enumerate() {
+        if !matches!(
+            object,
+            Object::Image(_) | Object::Text(_) | Object::Particles(_) | Object::Group
+        ) {
+            continue;
+        }
+        for &property in ANIMATABLE {
+            let timeline = value
+                .get(property)
+                .and_then(|value| value.get("animation"))
+                .and_then(|animation| Timeline::parse(animation).ok());
+            if let Some(timeline) = timeline {
+                found.push(Animated {
+                    object: at,
+                    target: Target::Object(property),
+                    timeline,
+                });
+            }
+        }
+        found.extend(effects::animations(at, objects));
+    }
+    found
 }
 
 /// The scripts on drawn objects' values and on their effects. Scripts anywhere else are

@@ -223,7 +223,7 @@ fn what_effects_do_that_isnt_drawn_is_refused_by_name() {
         (
             r#"[{"file":"effects/tint/effect.json","passes":[{"constantshadervalues":{"color":{"value":"1 1 1","animation":{}}}}]}]"#,
             "",
-            "animated effect values",
+            "an animated value at objects[0].effects",
         ),
         (
             r#"[{"file":"effects/copy/effect.json"}]"#,

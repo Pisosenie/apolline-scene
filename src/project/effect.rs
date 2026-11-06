@@ -218,6 +218,12 @@ impl Project {
             .ok_or_else(|| Error::Format("an effect material names no shader".into()))?;
         let mut combos = object(pass.get("combos"), 64, 64)?;
         let mut constants = object(pass.get("constantshadervalues"), 128, 128)?;
+        // Timelines play on the scene's own values, not on an effect material's.
+        if constants.values().any(|value| changing(value, &[])) {
+            return Err(Error::Format(
+                "an effect material's own animated values need another renderer".into(),
+            ));
+        }
         let mut textures = names(pass.get("textures"))?;
         if textures.first().is_some_and(Option::is_some) {
             return Err(Error::Format(
@@ -247,7 +253,7 @@ impl Project {
         if combos.values().any(|value| changing(value, &[]))
             || constants
                 .values()
-                .any(|value| changing(value, &["script", "scriptproperties"]))
+                .any(|value| changing(value, &["script", "scriptproperties", "animation"]))
         {
             return Err(Error::Format(
                 "animated effect values need another renderer".into(),
@@ -287,13 +293,16 @@ fn known(value: &Value, keys: &[&str]) -> Result<(), Error> {
     }
 }
 
-/// A value with more in it than a property binding and the `run` keys: an animation, or a
-/// script where none runs.
+/// A value with more in it than a property binding and the `run` keys, or a timeline that
+/// can't be played: an animation or a script where none runs.
 fn changing(value: &Value, run: &[&str]) -> bool {
     value.as_object().is_some_and(|fields| {
         fields
             .keys()
             .any(|key| !["value", "user"].contains(&key.as_str()) && !run.contains(&key.as_str()))
+            || fields
+                .get("animation")
+                .is_some_and(|animation| crate::scene::Timeline::parse(animation).is_err())
     })
 }
 

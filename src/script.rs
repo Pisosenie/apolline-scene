@@ -14,7 +14,7 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{Context, Ctx, Function, Module, Object, Runtime, Value};
 
 use crate::Error;
-use crate::scene::{Local, Node, Object as SceneObject, Pose, Scene, Target, pose};
+use crate::scene::{Driven, Local, Node, Object as SceneObject, Pose, Scene, Target, pose};
 
 const WORLD: &str = include_str!("script/world.js");
 const MODULES: [(&str, &str); 3] = [
@@ -49,7 +49,7 @@ pub struct Stage {
     lettered: bool,
     written: Vec<(usize, String)>,
     /// Whether each of the scene's effects is shown, as `Scene::effects` numbers them, and
-    /// the values scripts on effects give their shaders, in script order.
+    /// the values scripts and timelines give effects' shaders, as `Scene::driven` lists them.
     shown: Vec<bool>,
     values: Vec<[f32; 4]>,
     valued: bool,
@@ -77,7 +77,7 @@ impl Stage {
         scene: &Scene,
         user: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<Option<Self>, Error> {
-        if scene.scripts.is_empty() {
+        if scene.scripts.is_empty() && scene.animations.is_empty() {
             return Ok(None);
         }
         let fail = |what: rquickjs::Error| Error::Format(format!("SceneScript: {what}"));
@@ -125,10 +125,7 @@ impl Stage {
                 .map(|(_, effect)| effect.visible)
                 .collect(),
             values: Vec::new(),
-            valued: scene
-                .scripts
-                .iter()
-                .any(|script| matches!(script.target, Target::Value { .. })),
+            valued: !scene.driven.is_empty(),
         };
         stage.allow(LOADING_MS);
         // Cut short while loading, QuickJS says nothing useful about why.
@@ -180,8 +177,8 @@ impl Stage {
     }
 
     /// Whether each of the scene's effects is shown now, as `Scene::effects` numbers them, and
-    /// the values scripts give effects' shaders now: one for each script on one, in the order
-    /// the scene's scripts are in.
+    /// the values scripts and timelines give effects' shaders now, as `Scene::driven` lists
+    /// them.
     pub(crate) fn effects(&self) -> (&[bool], &[[f32; 4]]) {
         (&self.shown, &self.values)
     }
@@ -242,11 +239,44 @@ impl Stage {
                 serde_json::json!([object, effect.index, name, effect.visible, effect.undrawn])
             })
             .collect();
-        let scripted: Vec<serde_json::Value> = scene
-            .scripts
+        let driven: std::collections::HashMap<&Driven, usize> = scene
+            .driven
             .iter()
-            .filter(|script| matches!(script.target, Target::Value { .. }))
-            .map(|script| first_value(&effects, &slots, script))
+            .enumerate()
+            .map(|(slot, value)| (value, slot))
+            .collect();
+        let value_slot = |object: usize, target: &Target| {
+            Driven::of(object, target)
+                .and_then(|value| driven.get(&value).copied())
+                .map_or(-1, |slot| slot as i64)
+        };
+        let effect_slot = |object: usize, target: &Target| match target {
+            Target::Shown(place) | Target::Value { effect: place, .. } => {
+                slots.get(&(object, *place)).map_or(-1, |&slot| slot as i64)
+            }
+            Target::Object(_) => -1,
+        };
+        let scripted: Vec<serde_json::Value> = scene
+            .driven
+            .iter()
+            .map(|value| first_value(&effects, &slots, value))
+            .collect();
+        let timelines: Vec<serde_json::Value> = scene
+            .animations
+            .iter()
+            .map(|animated| {
+                let property = match animated.target {
+                    Target::Object(property) => property,
+                    _ => "",
+                };
+                serde_json::json!({
+                    "object": animated.object,
+                    "property": property,
+                    "value": value_slot(animated.object, &animated.target),
+                    "effect": effect_slot(animated.object, &animated.target),
+                    "timeline": animated.timeline.to_json(),
+                })
+            })
             .collect();
         let setup = serde_json::json!({
             "objects": objects,
@@ -254,6 +284,7 @@ impl Stage {
             "words": words,
             "layered": layered,
             "scripted": scripted,
+            "timelines": timelines,
             "width": scene.size.0,
             "height": scene.size.1,
             "user": user,
@@ -272,28 +303,16 @@ impl Stage {
             let add: Function = world.get("add").map_err(fail)?;
             let asking: Function = world.get("asking").map_err(fail)?;
             let mut failures = Vec::new();
-            let mut value = -1i64;
             for (at, script) in scene.scripts.iter().enumerate() {
                 asking.call::<_, String>(()).map_err(fail)?;
                 let properties = serde_json::Value::Object(script.properties.clone());
-                let slot = |place: usize| {
-                    slots
-                        .get(&(script.object, place))
-                        .map_or(-1, |&slot| slot as i64)
+                let effect = effect_slot(script.object, &script.target);
+                let (property, shown) = match &script.target {
+                    Target::Object(property) => (*property, -1),
+                    Target::Shown(_) => ("", effect),
+                    Target::Value { .. } => ("", -1),
                 };
-                let (property, shown, effect) = match &script.target {
-                    Target::Object(property) => (*property, -1, -1),
-                    Target::Shown(place) => ("", slot(*place), slot(*place)),
-                    Target::Value { effect, .. } => {
-                        value += 1;
-                        ("", -1, slot(*effect))
-                    }
-                };
-                let valued = if matches!(script.target, Target::Value { .. }) {
-                    value
-                } else {
-                    -1
-                };
+                let valued = value_slot(script.object, &script.target);
                 // An effect's scripts see the effect as `thisObject`, the rest their layer.
                 let this = if effect >= 0 {
                     format!("__world.effect({effect})")
@@ -454,19 +473,22 @@ impl Stage {
     }
 }
 
-/// The value a script on an effect's value starts from, as the scene gives it: how many
-/// numbers it is, 0 for a flag, and the numbers.
+/// The value a script or timeline on an effect's value starts from, as the scene gives it:
+/// how many numbers it is, 0 for a flag, and the numbers.
 fn first_value(
     effects: &[(usize, &crate::scene::Effect)],
     slots: &std::collections::HashMap<(usize, usize), usize>,
-    script: &crate::scene::Script,
+    driven: &Driven,
 ) -> serde_json::Value {
     use serde_json::Value as Json;
-    let Target::Value { effect, pass, name } = &script.target else {
-        return Json::Null;
-    };
+    let Driven {
+        object,
+        effect,
+        pass,
+        name,
+    } = driven;
     let given = slots
-        .get(&(script.object, *effect))
+        .get(&(*object, *effect))
         .and_then(|&slot| {
             effects[slot]
                 .1

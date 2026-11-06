@@ -1,9 +1,10 @@
-//! Effects the scene's scripts show, hide and give new values to as it runs.
+//! Effects the scene's scripts show and hide, and the values scripts and timelines give them,
+//! as it runs.
 
 use std::collections::HashMap;
 
 use super::Drawn;
-use crate::scene::{Scene, Target};
+use crate::scene::Scene;
 
 /// Where what the scripts say about effects lands in the drawn layers.
 #[derive(Default)]
@@ -11,8 +12,8 @@ pub(super) struct Wiring {
     /// For each of the scene's effects, as `Scene::effects` numbers them: the layers and
     /// steps that draw it.
     switches: Vec<Vec<(usize, usize)>>,
-    /// For each script on an effect's value, in script order: the layers, steps and
-    /// constants it sets.
+    /// For each effect value scripts or timelines drive, as `Scene::driven` lists them: the
+    /// layers, steps and constants it sets.
     knobs: Vec<Vec<(usize, usize, usize)>>,
 }
 
@@ -47,12 +48,9 @@ impl Wiring {
             })
             .collect();
         let knobs = scene
-            .scripts
+            .driven
             .iter()
-            .filter_map(|script| match &script.target {
-                Target::Value { effect, pass, name } => Some((script.object, *effect, *pass, name)),
-                _ => None,
-            })
+            .map(|driven| (driven.object, driven.effect, driven.pass, &driven.name))
             .map(|(object, effect, pass, name)| {
                 let mut found = Vec::new();
                 for (at, chain) in chained(object) {

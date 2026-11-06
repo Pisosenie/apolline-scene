@@ -475,7 +475,7 @@ fn a_scripted_scene_keeps_hidden_layers_for_its_scripts_to_show() {
     });
     assert_eq!((poses[0].alpha, poses[1].visible), (2.0, true));
     let broken = serde_json::to_string(
-        "export function update(value) { return thisLayer.getAnimation().frame; }",
+        "export function update(value) { return thisLayer.getAnimationLayer(0).frame; }",
     )
     .unwrap();
     std::fs::write(
@@ -485,7 +485,7 @@ fn a_scripted_scene_keeps_hidden_layers_for_its_scripts_to_show() {
     .unwrap();
     let error = project.prepare().err().unwrap().to_string();
     assert!(
-        error.contains("puppet's alpha") && error.contains("getAnimation"),
+        error.contains("puppet's alpha") && error.contains("getAnimationLayer"),
         "{error}"
     );
     std::fs::remove_dir_all(folder).unwrap();

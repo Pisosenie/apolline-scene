@@ -15,6 +15,7 @@ demos.add_argument("--wave-demo", action="store_true", help="apply a synthetic n
 demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and sun through pass-through materials with their own vertex shaders")
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
 demos.add_argument("--effect-script-demo", action="store_true", help="the effect demo with a black tint and inversions in the wrong places, which scripts put right")
+demos.add_argument("--animation-demo", action="store_true", help="the effect demo with the brick misplaced, the glow dimmed and the tint black, which timelines put right by the first second")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -22,7 +23,7 @@ demos.add_argument("--text-demo", action="store_true", help="write a title, a wr
 demos.add_argument("--inputs-demo", action="store_true", help="read the pointer, parallax, daytime and audio at their resting values, which leave the sky as it is")
 parser.add_argument("--without-mask", action="store_true", help="leave the mask sampler unbound in --mask-demo")
 args = parser.parse_args()
-args.effect_demo |= args.effect_script_demo
+args.effect_demo |= args.effect_script_demo or args.animation_demo
 if args.without_mask and not args.mask_demo:
     parser.error("--without-mask requires --mask-demo")
 out = args.folder
@@ -208,6 +209,23 @@ export function update() {
         dict(invert, visible={"script": hide, "value": True}),
         invert,
     ]
+    files["scene.json"] = json.dumps(scene).encode()
+if args.animation_demo:
+    # Shot a second in: the brick has slid to its place, the glow's alpha has been down and
+    # back up again, and the sky's tint has gone from black to white.
+    def keys(*points, straight=True):
+        handle = lambda x: {"enabled": not straight, "x": x, "y": 0}
+        return [{"frame": frame, "value": value, "back": handle(-1), "front": handle(1)} for frame, value in points]
+    scene = json.loads(files["scene.json"])
+    brick = next(o for o in scene["objects"] if o.get("name") == "brick")
+    brick["origin"] = {"value": "300 150 0", "animation": {"c0": keys((0, 0), (15, 660)), "relative": True,
+                       "options": {"fps": 30, "length": 15, "mode": "single", "wraploop": None}}}
+    glow = next(o for o in scene["objects"] if o.get("name") == "glow")
+    glow["alpha"] = {"value": 0.8, "animation": {"c0": keys((0, 0.8), (10, 0.2), straight=False),
+                     "options": {"fps": 20, "length": 10, "mode": "mirror"}}}
+    white = {f"c{at}": keys((0, 0), (10, 1)) for at in range(3)}
+    white["options"] = {"fps": 30, "length": 10, "mode": "single"}
+    scene["objects"][0]["effects"][0]["passes"][0]["constantshadervalues"]["color"] = {"value": "0 0 0", "animation": white}
     files["scene.json"] = json.dumps(scene).encode()
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.

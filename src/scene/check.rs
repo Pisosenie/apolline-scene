@@ -333,12 +333,22 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
         for (key, value) in fields {
             let scriptable =
                 super::SCRIPTABLE.contains(&key.as_str()) || (lettered && key == "text");
-            if scriptable && known.contains(&key.as_str()) && run(value) {
+            let animatable = super::ANIMATABLE.contains(&key.as_str());
+            if key == "angles" && tilts(value) {
+                note(Missing::Rotation3d);
+                continue;
+            }
+            if known.contains(&key.as_str())
+                && (scriptable && run(value)
+                    || animatable && plays(value, scriptable) && fits(key, value))
+            {
                 continue;
             }
             let path = format!("objects[{at}].{key}");
             if key == "effects" && known.contains(&"effects") {
                 effect_scripts(value, &path, &mut note);
+            } else if value.get("animation").is_some() {
+                note(Missing::Animated(path));
             } else if nested_script(value) {
                 note(Missing::Scripted(path));
             } else {
@@ -428,7 +438,11 @@ fn effect_scripts(effects: &Value, path: &str, note: &mut impl FnMut(Missing)) {
             continue;
         };
         for (key, value) in fields {
-            if !(key == "visible" && run(value) || key == "passes" && passes(effect).is_some()) {
+            if value.get("animation").is_some() {
+                found.push(Missing::Animated(path.to_owned()));
+            } else if !(key == "visible" && run(value)
+                || key == "passes" && passes(effect).is_some())
+            {
                 stray(value, &mut found);
             }
         }
@@ -443,8 +457,11 @@ fn effect_scripts(effects: &Value, path: &str, note: &mut impl FnMut(Missing)) {
                     stray(value, &mut found);
                     continue;
                 };
-                for value in values.values().filter(|value| !run(value)) {
-                    if nested_script(value) && value.get("animation").is_some() {
+                for value in values
+                    .values()
+                    .filter(|value| !run(value) && !plays(value, true))
+                {
+                    if value.get("animation").is_some() {
                         found.push(Missing::Animated(path.to_owned()));
                     } else {
                         stray(value, &mut found);
@@ -480,6 +497,53 @@ fn run(value: &Value) -> bool {
                     key.as_str(),
                     "script" | "scriptproperties" | "value" | "user"
                 )
+            })
+    })
+}
+
+/// A value a timeline plays, which it can, with nothing else in it but a script where one runs.
+fn plays(value: &Value, scriptable: bool) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields
+            .get("animation")
+            .is_some_and(|animation| super::Timeline::parse(animation).is_ok())
+            && fields.get("script").is_none_or(Value::is_string)
+            && fields.keys().all(|key| {
+                matches!(key.as_str(), "animation" | "value" | "user")
+                    || scriptable && matches!(key.as_str(), "script" | "scriptproperties")
+            })
+    })
+}
+
+/// Whether a timeline only has keys for components the value has: one for `alpha` and
+/// `brightness`, three for the rest.
+fn fits(key: &str, value: &Value) -> bool {
+    let width = if matches!(key, "alpha" | "brightness") {
+        1
+    } else {
+        3
+    };
+    value
+        .get("animation")
+        .and_then(Value::as_object)
+        .is_some_and(|fields| {
+            fields
+                .keys()
+                .filter_map(|key| super::timeline::channel(key))
+                .all(|channel| channel < width)
+        })
+}
+
+/// A timeline that turns a layer about x or y, out of the scene's plane.
+fn tilts(value: &Value) -> bool {
+    let animation = value.get("animation");
+    ["c0", "c1"].iter().any(|channel| {
+        animation
+            .and_then(|animation| animation.get(*channel))
+            .and_then(Value::as_array)
+            .is_some_and(|keys| {
+                keys.iter()
+                    .any(|key| number(key.get("value")).is_some_and(|turn| turn != 0.0))
             })
     })
 }
@@ -554,6 +618,34 @@ mod tests {
                 Missing::Setting("spaced-out text"),
                 Missing::Setting("text without a font"),
                 Missing::Animated("objects[1].maxwidth".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn timelines_play_on_places_looks_and_effect_values() {
+        let keys = json!([{"frame": 0, "value": 0}, {"frame": 10, "value": 1}]);
+        let plays =
+            json!({"value": 1, "animation": {"c0": keys, "options": {"fps": 30, "length": 10}}});
+        let broken = json!({"value": 1, "animation": {"c0": keys, "options": {"fps": 30}}});
+        let scene = json!({"objects": [
+            {"image": "a.json", "alpha": plays, "origin": broken,
+             "effects": [{"file": "e.json", "passes": [{"constantshadervalues": {"speed": plays}}]}]},
+            {"image": "b.json", "visible": plays},
+            {"text": "x", "font": "f.ttf", "maxwidth": plays},
+            {"image": "c.json", "angles": {"value": "0 0 0", "animation": {"c1": keys, "options": {"fps": 30, "length": 10}}}},
+            {"image": "d.json", "alpha": {"value": 1, "animation": {"c1": keys, "options": {"fps": 30, "length": 10}}},
+             "effects": [{"file": "e.json", "visible": {"value": true, "animation": {"c0": keys, "options": {"fps": 30, "length": 10}}}}]}
+        ]});
+        assert_eq!(
+            refusals(&scene),
+            [
+                Missing::Animated("objects[0].origin".into()),
+                Missing::Animated("objects[1].visible".into()),
+                Missing::Animated("objects[2].maxwidth".into()),
+                Missing::Rotation3d,
+                Missing::Animated("objects[4].alpha".into()),
+                Missing::Animated("objects[4].effects".into()),
             ]
         );
     }

@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::{Object, Script, Target, Text};
+use super::{Animated, Object, Script, Target, Text, Timeline};
 use crate::value::flag;
 
 /// One of a layer's effects.
@@ -96,6 +96,78 @@ pub(super) fn scripts(object: usize, objects: &[Object]) -> Vec<Script> {
         }
     }
     found
+}
+
+/// The timelines on an object's kept effects' values.
+pub(super) fn animations(object: usize, objects: &[Object]) -> Vec<Animated> {
+    let effects = match objects.get(object) {
+        Some(Object::Image(image) | Object::Text(Text { layer: image, .. })) => &image.effects,
+        _ => return Vec::new(),
+    };
+    let mut found = Vec::new();
+    for effect in effects {
+        let passes = effect.value.get("passes").and_then(Value::as_array);
+        for (pass, over) in passes.into_iter().flatten().enumerate() {
+            let values = over.get("constantshadervalues").and_then(Value::as_object);
+            for (name, value) in values.into_iter().flatten() {
+                let Some(timeline) = value
+                    .get("animation")
+                    .and_then(|animation| Timeline::parse(animation).ok())
+                else {
+                    continue;
+                };
+                found.push(Animated {
+                    object,
+                    target: Target::Value {
+                        effect: effect.index,
+                        pass,
+                        name: name.clone(),
+                    },
+                    timeline,
+                });
+            }
+        }
+    }
+    found
+}
+
+/// An effect value scripts or timelines drive.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Driven {
+    pub object: usize,
+    pub effect: usize,
+    pub pass: usize,
+    pub name: String,
+}
+
+impl Driven {
+    pub fn of(object: usize, target: &Target) -> Option<Self> {
+        match target {
+            Target::Value { effect, pass, name } => Some(Driven {
+                object,
+                effect: *effect,
+                pass: *pass,
+                name: name.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The effect values scripts and timelines drive, each once, scripts' first.
+pub(super) fn driven(scripts: &[Script], animations: &[Animated]) -> Vec<Driven> {
+    let mut seen = std::collections::HashSet::new();
+    scripts
+        .iter()
+        .map(|script| (script.object, &script.target))
+        .chain(
+            animations
+                .iter()
+                .map(|animated| (animated.object, &animated.target)),
+        )
+        .filter_map(|(object, target)| Driven::of(object, target))
+        .filter(|driven| seen.insert(driven.clone()))
+        .collect()
 }
 
 fn script(value: Option<&Value>) -> Option<&serde_json::Map<String, Value>> {

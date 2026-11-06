@@ -49,8 +49,8 @@ rest, by scenes:
 
 - SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers. Scripts
   on objects' place and look, on text layers' words and on effects run now (below); what keeps
-  those scenes out is mostly particle overrides (8), effect values animated by timelines that
-  scripts start (9), bloom and property conditions, and in four scenes
+  those scenes out is mostly particle overrides (8), bloom and property conditions, and in four
+  scenes
   `thisScene.createLayer`/`destroyLayer` and `getTransformMatrix`. None of the 15 scenes with
   effect scripts was held by them alone; the survey's "a few steps away" table shows what
   each near scene still lacks.
@@ -140,9 +140,24 @@ texture and its effect targets are drawn again at the new size. Opaque backgroun
 spacing and block alignment are refused; `anchor` (keeping a layer by a screen edge on
 screens shaped unlike the scene) is ignored.
 
-**E. Timeline animations**, **G. puppet warp**: each once its storage is known
-from real files. 3D scenes,
-lights and models are not planned.
+**E. Timeline animations**, done: an `animation` on an object's `origin`, `scale`, `angles`,
+`color`, `alpha` or `brightness`, or on an effect's value, plays each frame before the scripts
+run, so a script on the same value gets what the timeline gives. Each component has its own
+keys; between two keys the value follows a cubic with the slopes the key handles give: flat
+for the editor's default handles (easing in and out), through the neighbouring keys for
+automatic (`magic`) ones, straight at the neighbour for a disabled one, and the handle's rise
+over its run for one dragged by hand. That last reading is inferred from what the editor saved
+for automatic handles, which fit it on their longer side; no real scene's hand-dragged handles
+could be checked against Wallpaper Engine. Timelines loop, play once and hold, or mirror; a
+loop with `wraploop` runs from its last key back to its first; `relative` adds to the value;
+`startpaused` waits at frame 0. `getAnimation(name)` on a layer or effect plays, pauses, stops
+and sets frames. Animation events (`events`) aren't sent, and `parent`/`children` links don't
+tie playback together beyond all starting at once. Timelines on visibility, text, particle
+overrides and the camera, turns out of the scene's plane, an effect material's own values and
+more than 4096 in a scene are still refused.
+
+**G. puppet warp**: once its storage is known from real files. 3D scenes, lights and models
+are not planned.
 
 **Measured.** With real files: the corpus of the 200 most subscribed scenes, each shot
 natively and through linux-wallpaperengine as a black box, against the author's own preview;

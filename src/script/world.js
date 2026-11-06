@@ -169,6 +169,7 @@ class Layer {
         return found < 0 ? null : effects[found];
     }
     getEffectCount() { return effectList.filter(([object]) => object === this.index).length; }
+    getAnimation(name) { return animation((timeline) => timeline.object === this.index && timeline.effect < 0, name); }
 }
 
 class Effect {
@@ -183,6 +184,104 @@ class Effect {
         }
         shown[this.slot] = value ? 1 : 0;
     }
+    getAnimation(name) { return animation((timeline) => timeline.effect === this.slot, name); }
+}
+
+// Timelines, each on an object's value or an effect value, and where each has got to in
+// frames. Keys are [frame, value, slope in, slope out].
+const timelines = [];
+
+function hermite(from, to, frame) {
+    const span = to[0] - from[0];
+    if (!(span > 0)) {
+        return to[1];
+    }
+    const t = (frame - from[0]) / span, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * from[1] + (t3 - 2 * t2 + t) * span * from[3]
+        + (3 * t2 - 2 * t3) * to[1] + (t3 - t2) * span * to[2];
+}
+function sample(keys, frame, timeline) {
+    const first = keys[0], last = keys[keys.length - 1];
+    const wraps = timeline.wrap && timeline.mode === 'loop';
+    if (frame >= last[0]) {
+        return wraps ? hermite(last, [first[0] + timeline.length, ...first.slice(1)], frame) : last[1];
+    }
+    if (frame < first[0]) {
+        return wraps ? hermite([last[0] - timeline.length, ...last.slice(1)], first, frame) : first[1];
+    }
+    let low = 0, high = keys.length - 1;
+    while (high - low > 1) {
+        const middle = (low + high) >> 1;
+        if (keys[middle][0] <= frame) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    return hermite(keys[low], keys[high], frame);
+}
+// The frame a timeline shows, from how far it has played.
+function shownFrame(timeline) {
+    const length = timeline.length, at = timeline.position;
+    if (timeline.mode === 'single') {
+        return Math.min(Math.max(at, 0), length);
+    }
+    if (timeline.mode === 'mirror') {
+        const bounce = ((at % (2 * length)) + 2 * length) % (2 * length);
+        return bounce <= length ? bounce : 2 * length - bounce;
+    }
+    return ((at % length) + length) % length;
+}
+function play(timeline, frametime) {
+    if (timeline.playing) {
+        timeline.position += frametime * timeline.fps;
+        if (timeline.mode === 'single' && timeline.position >= timeline.length) {
+            timeline.position = timeline.length;
+            timeline.playing = false;
+        }
+    }
+    const frame = shownFrame(timeline);
+    const angles = timeline.property === 'angles' ? 180 / Math.PI : 1;
+    timeline.channels.forEach((keys, channel) => {
+        if (keys.length === 0 || channel >= timeline.base.length) {
+            return;
+        }
+        const value = sample(keys, frame, timeline) * angles + (timeline.relative ? timeline.base[channel] : 0);
+        if (!isFinite(value)) {
+            return;
+        }
+        if (timeline.value >= 0) {
+            values[timeline.value].numbers[channel] = value;
+        } else {
+            state[timeline.object * STRIDE + slots[timeline.property] + channel] = value;
+        }
+    });
+}
+// What scripts hold of a timeline: the first one `chosen` picks, by name if given.
+function animation(chosen, name) {
+    const timeline = timelines.find((timeline) => chosen(timeline) && (name === undefined || timeline.name === name));
+    if (timeline === undefined) {
+        return null;
+    }
+    return watched({
+        get name() { return timeline.name; },
+        get frameCount() { return timeline.length; },
+        get rate() { return timeline.fps; },
+        play() {
+            if (timeline.mode === 'single' && timeline.position >= timeline.length) {
+                timeline.position = 0;
+            }
+            timeline.playing = true;
+        },
+        pause() { timeline.playing = false; },
+        stop() { timeline.playing = false; timeline.position = 0; },
+        isPlaying: () => timeline.playing,
+        getFrame: () => shownFrame(timeline),
+        setFrame(frame) {
+            const at = finite(frame, timeline.position);
+            timeline.position = timeline.mode === 'single' ? Math.min(Math.max(at, 0), timeline.length) : at;
+        },
+    }, 'animation');
 }
 
 // A value as numbers, `count` of them; what can't be read keeps what was there.
@@ -344,7 +443,7 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
     // Objects as [name, parent index or -1, width, height], their state, flattened, and
     // their words; effects as [object, place, name, shown, why it can't be drawn or null],
     // and the first values of those scripts are on, as [count, four numbers].
-    setup({ objects, initial, words, width, height, user, layered, scripted }) {
+    setup({ objects, initial, words, width, height, user, layered, scripted, timelines: animated }) {
         texts = words;
         effectList = layered.map(([object, place, name, , why]) => [object, place, name, why ?? null]);
         shown = Uint8Array.from(layered.map((effect) => (effect[3] ? 1 : 0)));
@@ -359,6 +458,12 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
         objects.forEach((_, index) => layers.push(watched(new Layer(index), 'layer')));
         canvas = new Vec2(width, height);
         engine.userProperties = user;
+        for (const { object, property, value, effect, timeline } of animated) {
+            const width = value >= 0 ? 4 : property === 'alpha' || property === 'brightness' ? 1 : 3;
+            const base = value >= 0 ? values[value].numbers.slice()
+                : Array.from(state.slice(object * STRIDE + slots[property], object * STRIDE + slots[property] + width));
+            timelines.push({ ...timeline, object, property, value, effect, base, playing: !timeline.paused, position: 0 });
+        }
     },
     layer: (index) => layers[index],
     effect: (slot) => effects[slot],
@@ -416,6 +521,9 @@ Object.defineProperty(globalThis, '__world', { writable: false, configurable: fa
             }, timer.callback);
         }
         timers = timers.filter((timer) => !timer.stopped);
+        for (const timeline of timelines) {
+            play(timeline, frametime);
+        }
         for (const script of scripts.filter((script) => script.error === null)) {
             guarded((message) => { script.error = message; }, () => {
                 if (!script.started) {

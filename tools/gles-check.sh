@@ -19,7 +19,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 cargo build --quiet --example view --manifest-path "$root/Cargo.toml"
 view=${CARGO_TARGET_DIR:-$root/target}/debug/examples/view
-projects=(demo fragment mask wave vertex effect effect-script values particle inputs script text dialect)
+projects=(demo fragment mask wave vertex effect effect-script animation values particle inputs script text dialect)
 python3 "$root/tools/demo-scene.py" "$work/demo" > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/fragment" --fragment-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/mask" --mask-demo > /dev/null
@@ -27,6 +27,7 @@ python3 "$root/tools/demo-scene.py" "$work/wave" --wave-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/vertex" --vertex-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/effect" --effect-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/effect-script" --effect-script-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/animation" --animation-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/inputs" --inputs-demo > /dev/null
@@ -86,12 +87,14 @@ print(list(raw[1:1 + (4 if color == 6 else 3)]), "all", hashlib.sha1(raw).hexdig
 PY
 }
 for project in "${projects[@]}"; do
-    "$view" --shot "$work/$project.png" "$work/$project" 2>&1 | sed "s/^/$project: /"
+    # Timelines are shot a second in, when they've put everything back.
+    when=(); [ "$project" = animation ] && when=(--time 1)
+    "$view" --shot "$work/$project.png" ${when[@]+"${when[@]}"} "$work/$project" 2>&1 | sed "s/^/$project: /"
     pixel=$(first_pixel "$work/$project.png")
     echo "${pixel##* }" > "$work/$project.hash"
     echo "$project: first pixel $pixel"
 done
 # Hashes differ between drivers, but these demos have to draw what the plain one does on each.
-for project in vertex effect effect-script inputs script; do
+for project in vertex effect effect-script animation inputs script; do
     cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done

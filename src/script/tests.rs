@@ -350,3 +350,97 @@ fn values_keep_their_shape_until_scripts_change_them() {
     assert_eq!(values[1][0], 1.0);
     assert_eq!(values[2][..2], [1.0, 2.0]);
 }
+
+fn after(delta: f32) -> Moment<'static> {
+    Moment { delta, ..at(0.0) }
+}
+
+/// Keys at the given frames and values, with handles `ease` (flat) or straight.
+fn keys(points: &[(f32, f32)], ease: bool) -> String {
+    let handle = |x: i32| format!(r#"{{"enabled": {ease}, "x": {x}, "y": 0}}"#);
+    let keys: Vec<String> = points
+        .iter()
+        .map(|(frame, value)| {
+            format!(
+                r#"{{"frame": {frame}, "value": {value}, "back": {}, "front": {}}}"#,
+                handle(-1),
+                handle(1)
+            )
+        })
+        .collect();
+    format!("[{}]", keys.join(","))
+}
+
+#[test]
+fn timelines_play_on_objects_values_each_frame() {
+    let line = keys(&[(0.0, 0.0), (30.0, 100.0)], false);
+    let ease = keys(&[(0.0, 0.0), (30.0, 100.0)], true);
+    let turn = keys(&[(0.0, 0.0), (30.0, std::f32::consts::PI)], false);
+    let scene = scene(&format!(
+        r#"[{{"image": "a.json", "origin": {{"value": "10 20 0", "animation":
+              {{"c0": {line}, "options": {{"fps": 30, "length": 60, "mode": "loop"}}, "relative": true}}}},
+              "alpha": {{"value": 1, "animation": {{"c0": {ease}, "options": {{"fps": 30, "length": 30, "mode": "single"}}}}}},
+              "angles": {{"value": "0 0 0", "animation": {{"c2": {turn}, "options": {{"fps": 30, "length": 30, "mode": "mirror"}}}}}}}}]"#
+    ));
+    assert!(scene.missing().is_empty(), "{:?}", scene.missing());
+    let mut stage = stage(&scene);
+    // A quarter second in: frame 7.5 of 30.
+    let pose = stage.tick(after(0.25))[0];
+    assert!(
+        (pose.origin[0] - (10.0 + 25.0)).abs() < 1e-3,
+        "{:?}",
+        pose.origin
+    );
+    assert_eq!(pose.origin[1], 20.0);
+    // Flat handles ease: a quarter of the way in time is 15.625% of the way.
+    assert!((pose.alpha - 15.625).abs() < 1e-3, "{}", pose.alpha);
+    assert!((pose.angle - std::f32::consts::FRAC_PI_4).abs() < 1e-4);
+    // A second and a quarter in: the loop past its last key, holding it, the single one held
+    // at its end, and the mirror on its way back.
+    let pose = stage.tick(after(1.0))[0];
+    assert_eq!(pose.origin[0], 110.0);
+    assert_eq!(pose.alpha, 100.0);
+    assert!(
+        (pose.angle - std::f32::consts::FRAC_PI_4 * 3.0).abs() < 1e-4,
+        "{}",
+        pose.angle
+    );
+}
+
+#[test]
+fn a_loop_that_wraps_runs_from_its_last_key_back_to_its_first() {
+    let line = keys(&[(10.0, 0.0), (30.0, 100.0)], false);
+    let scene = scene(&format!(
+        r#"[{{"image": "a.json", "alpha": {{"value": 1, "animation": {{"c0": {line},
+            "options": {{"fps": 10, "length": 40, "mode": "loop", "wraploop": true}}}}}}}}]"#
+    ));
+    let mut stage = stage(&scene);
+    // Frame 35, a quarter of the way from the last key at 30 to the first again at 50.
+    assert!((stage.tick(after(3.5))[0].alpha - 75.0).abs() < 1e-3);
+    // Frame 5 of the next time round, still on the way down to it.
+    assert!((stage.tick(after(1.0))[0].alpha - 25.0).abs() < 1e-3);
+}
+
+#[test]
+fn scripts_see_animated_values_and_start_paused_timelines() {
+    let line = keys(&[(0.0, 0.0), (10.0, 1.0)], false);
+    let start = scripted(
+        "export function init() { thisObject.getAnimation('later').play(); }
+         export function update(value) { return value * 2; }",
+    );
+    let scene = scene(&format!(
+        r#"[{{"image": "a.json", "effects": [{{"file": "a", "passes": [{{"constantshadervalues": {{
+            "speed": {{"value": 0, "script": {start}, "animation": {{"c0": {line},
+                "options": {{"fps": 10, "length": 10, "mode": "single", "startpaused": true, "name": "later"}}}}}},
+            "still": {{"value": 0, "animation": {{"c0": {line},
+                "options": {{"fps": 10, "length": 10, "mode": "single", "startpaused": true}}}}}}}}}}]}}]}}]"#
+    ));
+    assert!(scene.missing().is_empty(), "{:?}", scene.missing());
+    assert_eq!(scene.driven.len(), 2);
+    let mut stage = stage(&scene);
+    stage.tick(after(0.5));
+    let values = stage.effects().1;
+    // Played by its script and doubled by it; the other waits at its start.
+    assert!((values[0][0] - 1.0).abs() < 1e-4, "{:?}", values[0]);
+    assert_eq!(values[1][0], 0.0);
+}
