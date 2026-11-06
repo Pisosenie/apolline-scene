@@ -239,7 +239,14 @@ impl<'a> Builder<'a> {
             None,
             Some(swarm),
             layer,
-            Base::Particles { shade: layer.shade },
+            Base::Particles {
+                shade: layer.shade,
+                child: layer.child.as_ref().map(|child| super::Offset {
+                    origin: [child.origin[0], child.origin[1]],
+                    scale: [child.scale[0], child.scale[1]],
+                    angle: child.angles[2],
+                }),
+            },
         ))
     }
 

@@ -59,6 +59,7 @@ impl Project {
             sprite: false,
             compose: false,
             particles: None,
+            child: None,
             text: Some(Arc::new(lettering)),
         })
     }

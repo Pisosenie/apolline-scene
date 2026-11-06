@@ -128,7 +128,18 @@ enum Base {
     Whole { scene: (f32, f32), shade: [f32; 2] },
     /// A particle system: the object's origin and scale place and size it, and its material
     /// brightens it.
-    Particles { shade: [f32; 2] },
+    Particles {
+        shade: [f32; 2],
+        child: Option<Offset>,
+    },
+}
+
+/// Where a child particle system sits from its parent's place, in the parent's units.
+#[derive(Clone, Copy)]
+struct Offset {
+    origin: [f32; 2],
+    scale: [f32; 2],
+    angle: f32,
 }
 
 impl Drawn {
@@ -167,10 +178,24 @@ impl Drawn {
                 self.size = scene;
                 self.tint = shaded(shade);
             }
-            Base::Particles { shade } => {
+            Base::Particles { shade, child } => {
                 self.origin = [pose.origin[0], pose.origin[1]];
                 self.size = (pose.scale[0], pose.scale[1]);
                 self.tint = [shade[0], shade[0], shade[0], 1.0];
+                // A child sits its own way from its parent's place, at its parent's scale.
+                if let Some(Offset {
+                    origin: [x, y],
+                    scale,
+                    angle,
+                }) = child
+                {
+                    let (sin, cos) = pose.angle.sin_cos();
+                    let [x, y] = [x * pose.scale[0], y * pose.scale[1]];
+                    self.origin[0] += cos * x - sin * y;
+                    self.origin[1] += sin * x + cos * y;
+                    self.size = (self.size.0 * scale[0], self.size.1 * scale[1]);
+                    self.angle += angle;
+                }
             }
         }
     }

@@ -23,7 +23,30 @@ pub struct System {
     /// How its sprite sheet's frames are shown, when its texture is one.
     pub sheet: Sheet,
     pub renderer: Renderer,
+    /// Systems let out once with it, each placed from its origin.
+    pub children: Vec<Child>,
 }
+
+/// A child system let out once at its parent's origin, moved, scaled and turned from it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Child {
+    /// Its own file, `particles/….json`.
+    pub file: String,
+    pub origin: [f32; 3],
+    pub scale: [f32; 3],
+    pub angles: [f32; 3],
+}
+
+const CHILD: &[&str] = &[
+    "angles",
+    "controlpointstartindex",
+    "flags",
+    "maxcount",
+    "origin",
+    "probability",
+    "scale",
+    "type",
+];
 
 /// How each particle is drawn: a sprite facing the screen, or one stretched along the way it
 /// goes, `length` times its speed long between `min` and `max` times its size.
@@ -221,11 +244,27 @@ impl System {
             ),
             Some(_) => return Err(refuse("particle sprite sheet animation")),
         };
-        if root
-            .get("children")
-            .is_some_and(|children| children.as_array().is_some_and(|list| !list.is_empty()))
-        {
-            return Err(refuse("child particle systems"));
+        let mut children = Vec::new();
+        for child in list(root, "children")? {
+            known(child, CHILD, "child system")?;
+            // Children tied to their parent's particles are let out with each of them.
+            if !matches!(text(child.get("type")), None | Some("static")) {
+                return Err(refuse("child particle systems tied to particles"));
+            }
+            if number(child.get("probability")).is_some_and(|chance| chance < 1.0) {
+                return Err(refuse("child particle systems let out by chance"));
+            }
+            let file = text(child.get("name"))
+                .ok_or_else(|| refuse("a child particle system without a file"))?;
+            children.push(Child {
+                file: file.to_owned(),
+                origin: vector(child.get("origin"), [0.0; 3]),
+                scale: vector(child.get("scale"), [1.0; 3]),
+                angles: vector(child.get("angles"), [0.0; 3]),
+            });
+            if children.len() > 8 {
+                return Err(refuse("more than 8 child particle systems"));
+            }
         }
         let material = text(root.get("material"))
             .ok_or_else(|| refuse("a particle system without a material"))?
@@ -286,6 +325,7 @@ impl System {
             perspective: flags & PERSPECTIVE != 0,
             sheet,
             renderer,
+            children,
         })
     }
 }
@@ -476,7 +516,7 @@ fn operator(value: &Value) -> Result<Operator, Error> {
 
 fn list<'a>(root: &'a Value, key: &str) -> Result<&'a [Value], Error> {
     match root.get(key) {
-        None => Ok(&[]),
+        None | Some(Value::Null) => Ok(&[]),
         Some(Value::Array(items)) if items.len() <= 32 => Ok(items),
         Some(_) => Err(refuse(&format!("particle {key} that isn't a short list"))),
     }
@@ -581,7 +621,7 @@ mod tests {
             ),
             (
                 r#""starttime": 2"#,
-                r#""starttime": 2, "children": [{"name": "x"}]"#,
+                r#""starttime": 2, "children": [{"name": "x", "type": "eventdeath"}]"#,
                 "child particle",
             ),
             (

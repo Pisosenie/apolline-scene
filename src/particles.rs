@@ -6,4 +6,4 @@ mod simulation;
 mod system;
 
 pub use simulation::{Particle, Simulation};
-pub use system::{Between, Emitter, Operator, Renderer, Shape, Sheet, Spawn, Swing, System};
+pub use system::{Between, Child, Emitter, Operator, Renderer, Shape, Sheet, Spawn, Swing, System};

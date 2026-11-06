@@ -67,6 +67,8 @@ pub struct Layer {
     pub compose: bool,
     /// A particle system drawn with its texture, in place of a picture.
     pub particles: Option<Arc<crate::particles::System>>,
+    /// Where a child particle system sits from its object's place; its file is the parent's.
+    pub child: Option<crate::particles::Child>,
     /// How a text layer's words are drawn, for when its scripts change them.
     pub text: Option<Arc<crate::text::Lettering>>,
 }
@@ -411,36 +413,39 @@ impl Project {
             let (name, layer) = match object {
                 Object::Image(image) => (
                     &image.name,
-                    self.layer(image, &mut models, &mut textures, &mut remaining, still),
+                    self.layer(image, &mut models, &mut textures, &mut remaining, still)
+                        .map(|layer| vec![layer]),
                 ),
                 Object::Text(text) => (
                     &text.layer.name,
-                    self.text_layer(text, &mut fonts, &mut textures, &mut remaining, still),
+                    self.text_layer(text, &mut fonts, &mut textures, &mut remaining, still)
+                        .map(|layer| vec![layer]),
                 ),
                 Object::Particles(particles) => (
                     &particles.name,
-                    self.particle_layer(particles, &mut textures, &mut remaining)
-                        .and_then(|layer| {
+                    self.particle_layers(particles, &mut textures, &mut remaining)
+                        .and_then(|family| {
                             // Worldspace particles stay put while their system moves, which
                             // isn't drawn; one that never moves draws the same either way.
-                            if layer.particles.as_ref().is_some_and(|system| system.world)
-                                && moves(scene, at)
+                            if family.iter().any(|layer| {
+                                layer.particles.as_ref().is_some_and(|system| system.world)
+                            }) && moves(scene, at)
                             {
                                 return Err(Error::Format(
                                     "worldspace particles on a moving layer need another renderer"
                                         .into(),
                                 ));
                             }
-                            Ok(layer)
+                            Ok(family)
                         }),
                 ),
                 _ => continue,
             };
             match layer {
-                Ok(layer) => layers.push(Layer {
+                Ok(family) => layers.extend(family.into_iter().map(|layer| Layer {
                     object: at,
                     ..layer
-                }),
+                })),
                 Err(err) => {
                     if skipped.len() < 64 {
                         let name: String = name.chars().take(160).collect();
@@ -499,6 +504,7 @@ impl Project {
             sprite: resolved.sprite,
             compose: resolved.compose,
             particles: None,
+            child: None,
             text: None,
         })
     }

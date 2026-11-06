@@ -110,7 +110,12 @@ animated sprites are still refused.
 
 **D. Particles**: a deterministic simulation core (emitters, initializers, operators as the
 documentation names them, seeded), then parsing once the survey gives the JSON keys, then
-one instanced draw per system; control points, children, trails and audio after.
+one instanced draw per system; control points, children, trails and audio after. Static
+children are drawn: each is one more system of the same object, let out once and drawn after
+its parent, its origin in the parent's units and turned with it, three generations deep at
+most. Children let out per particle (`eventspawn`, `eventfollow`, `eventdeath`) are refused;
+none of the near scenes was held by static children alone, so their placement hasn't been
+checked against Wallpaper Engine yet.
 
 **F. SceneScript**, done for objects: each `{script, scriptproperties, value}` on an image,
 particle system or group's `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or

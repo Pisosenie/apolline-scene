@@ -130,3 +130,70 @@ fn worldspace_particles_draw_on_a_layer_that_stays_put() {
     );
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn static_children_follow_their_parent_and_event_children_are_refused() {
+    let folder = scene(
+        "particle-children",
+        r#"{"passes":[{"textures":["particle/flake"]}]}"#,
+    );
+    let write = |path: &str, text: &str| std::fs::write(folder.join(path), text).unwrap();
+    let system = |children: &str| {
+        format!(
+            r#"{{"material":"materials/particle/flake.json","maxcount":20,
+                "emitter":[{{"name":"boxrandom","rate":10}}],"renderer":[{{"name":"sprite"}}],
+                "children":{children}}}"#
+        )
+    };
+    write(
+        "particles/snow.json",
+        &system(
+            r#"[{"name":"particles/spark.json","type":"static","origin":"10 0 0","scale":"2 2 2"}]"#,
+        ),
+    );
+    write(
+        "particles/spark.json",
+        &system(r#"[{"name":"particles/dust.json","origin":"1 0 0","angles":"0 0 1"}]"#),
+    );
+    write("particles/dust.json", &system("[]"));
+    let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
+    let family: Vec<_> = prepared.layers[1..4]
+        .iter()
+        .map(|layer| (layer.object, layer.child.clone()))
+        .collect();
+    assert!(family.iter().all(|(object, _)| *object == 1));
+    assert_eq!(family[0].1, None);
+    let spark = family[1].1.as_ref().unwrap();
+    assert_eq!((spark.origin, spark.scale), ([10.0, 0.0, 0.0], [2.0; 3]));
+    // The dust sits from the spark at the spark's scale.
+    let dust = family[2].1.as_ref().unwrap();
+    assert_eq!(
+        (dust.origin, dust.scale, dust.angles),
+        ([12.0, 0.0, 0.0], [2.0; 3], [0.0, 0.0, 1.0])
+    );
+    assert!(prepared.layers[4].particles.is_none());
+
+    write(
+        "particles/dust.json",
+        &system(r#"[{"name":"particles/dust.json"}]"#),
+    );
+    let refused = Project::open(&folder, None)
+        .unwrap()
+        .prepare()
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refused.contains("generations deep"), "{refused}");
+    write(
+        "particles/snow.json",
+        &system(r#"[{"name":"particles/spark.json","type":"eventdeath"}]"#),
+    );
+    let refused = Project::open(&folder, None)
+        .unwrap()
+        .prepare()
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refused.contains("tied to particles"), "{refused}");
+    std::fs::remove_dir_all(folder).unwrap();
+}

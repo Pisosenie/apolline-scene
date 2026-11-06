@@ -3,12 +3,59 @@
 
 use super::material::{Resources, names, object};
 use super::*;
-use crate::particles::System;
+use crate::particles::{Child, System};
 use crate::scene::Particles;
 use crate::value::number;
 
+/// How deep children of children may go.
+const GENERATIONS: usize = 3;
+
 impl Project {
-    pub(super) fn particle_layer(
+    /// The system's layer, then its children's, each drawn after the one it comes from.
+    pub(super) fn particle_layers(
+        &self,
+        placed: &Particles,
+        resources: &mut Resources,
+        remaining: &mut usize,
+    ) -> Result<Vec<Layer>, Error> {
+        let mut family = vec![self.particle_layer(placed, resources, remaining)?];
+        // How many systems each one is down from the top.
+        let mut generations = vec![0];
+        let mut at = 0;
+        while let Some(parent) = family.get(at) {
+            let children = parent
+                .particles
+                .as_ref()
+                .map_or(&[][..], |system| &system.children[..]);
+            if !children.is_empty() && generations[at] >= GENERATIONS {
+                return Err(Error::Format(format!(
+                    "particle systems more than {GENERATIONS} generations deep"
+                )));
+            }
+            let mut born = Vec::new();
+            for child in children {
+                let file = Particles {
+                    file: child.file.clone(),
+                    ..placed.clone()
+                };
+                let layer = self.particle_layer(&file, resources, remaining)?;
+                born.push(Layer {
+                    child: Some(within(parent.child.as_ref(), child)),
+                    ..layer
+                });
+            }
+            let generation = generations[at] + 1;
+            generations.extend(born.iter().map(|_| generation));
+            family.extend(born);
+            if family.len() > 64 {
+                return Err(Error::Format("more than 64 particle systems in one".into()));
+            }
+            at += 1;
+        }
+        Ok(family)
+    }
+
+    fn particle_layer(
         &self,
         placed: &Particles,
         resources: &mut Resources,
@@ -142,8 +189,32 @@ impl Project {
             sprite: false,
             compose: false,
             particles: Some(Arc::new(system)),
+            child: None,
             text: None,
         })
+    }
+}
+
+/// A child's place from the top system's, through the one it comes from.
+fn within(parent: Option<&Child>, child: &Child) -> Child {
+    let Some(parent) = parent else {
+        return child.clone();
+    };
+    let (sin, cos) = parent.angles[2].sin_cos();
+    let [x, y, z] = [
+        child.origin[0] * parent.scale[0],
+        child.origin[1] * parent.scale[1],
+        child.origin[2] * parent.scale[2],
+    ];
+    Child {
+        file: child.file.clone(),
+        origin: [
+            parent.origin[0] + cos * x - sin * y,
+            parent.origin[1] + sin * x + cos * y,
+            parent.origin[2] + z,
+        ],
+        scale: [0, 1, 2].map(|axis| parent.scale[axis] * child.scale[axis]),
+        angles: [0, 1, 2].map(|axis| parent.angles[axis] + child.angles[axis]),
     }
 }
 
