@@ -123,7 +123,7 @@ to 256 KiB, combined input and expanded source up to 1 MiB each. Includes are ex
 GLSL conditional evaluation, so a missing include in an inactive branch also refuses this
 subset. Host macros cannot be redefined. There may be 64 custom materials/programs and 16 MiB
 of prepared source per preparation/renderer. Unique GPU texture allocations have a separate
-512 MiB logical budget; it is not a whole-process RSS or exact VRAM guarantee. Driver shader
+1 GiB logical budget; it is not a whole-process RSS or exact VRAM guarantee. Driver shader
 compilation is not sandboxed or time-bounded by these source limits.
 
 Programs and textures are reused across repeated layers; failed construction deletes resources

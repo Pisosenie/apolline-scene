@@ -139,11 +139,14 @@ unsafe fn fill_image(
     }
 }
 
+/// How much a scene's distinct textures and render targets may take on the GPU.
+const BUDGET: usize = 1024 * 1024 * 1024;
+
 pub(super) fn reserve(allocated: &mut usize, bytes: usize) -> Result<(), Error> {
     *allocated = allocated
         .checked_add(bytes)
-        .filter(|total| *total <= 512 * 1024 * 1024)
-        .ok_or_else(|| Error::Format("scene GPU texture allocations exceed 512 MiB".into()))?;
+        .filter(|total| *total <= BUDGET)
+        .ok_or_else(|| Error::Format("scene GPU texture allocations exceed 1 GiB".into()))?;
     Ok(())
 }
 
@@ -185,10 +188,10 @@ mod tests {
     #[test]
     fn gpu_budget_bounds_unique_texture_allocations() {
         let mut allocated = 0;
-        assert!(reserve(&mut allocated, 256 * 1024 * 1024).is_ok());
-        assert!(reserve(&mut allocated, 256 * 1024 * 1024).is_ok());
+        assert!(reserve(&mut allocated, 512 * 1024 * 1024).is_ok());
+        assert!(reserve(&mut allocated, 512 * 1024 * 1024).is_ok());
         assert!(reserve(&mut allocated, 4).is_err());
-        assert_eq!(allocated, 512 * 1024 * 1024);
+        assert_eq!(allocated, BUDGET);
         assert!(reserve(&mut allocated, usize::MAX).is_err());
     }
 
