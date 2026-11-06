@@ -80,6 +80,17 @@ fn an_instance_scales_its_system_and_unknown_overrides_are_refused() {
     let system = prepared.layers[1].particles.as_ref().unwrap();
     assert_eq!((system.max, system.emitters[0].rate), (10, 20.0));
     assert_eq!(system.spawn.color.high, [1.0, 0.0, 0.0]);
+    let bytes = scene.replace(r#""colorn":"1 0 0""#, r#""color":"255 51 0""#);
+    std::fs::write(folder.join("scene.json"), &bytes).unwrap();
+    let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
+    let color = prepared.layers[1]
+        .particles
+        .as_ref()
+        .unwrap()
+        .spawn
+        .color
+        .high;
+    assert_eq!(color, [1.0, 0.2, 0.0]);
     std::fs::write(
         folder.join("scene.json"),
         scene.replace(r#""rate":2"#, r#""wobble":2"#),

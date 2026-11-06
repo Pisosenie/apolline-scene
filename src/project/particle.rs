@@ -252,8 +252,10 @@ fn overridden(
                     emitter.speed = emitter.speed.map(|v| v * factor);
                 }
             }
-            "colorn" => {
-                let tint = crate::value::vector(Some(value), [1.0; 3]);
+            // A tint, from 0 to 1 or, in older scenes, 0 to 255.
+            "colorn" | "color" => {
+                let bytes = if key == "color" { 255.0 } else { 1.0 };
+                let tint = crate::value::vector(Some(value), [bytes; 3]).map(|tint| tint / bytes);
                 let color = &mut system.spawn.color;
                 for (channel, tint) in tint.iter().enumerate() {
                     color.low[channel] *= tint;
