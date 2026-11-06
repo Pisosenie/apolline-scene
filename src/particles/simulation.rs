@@ -487,7 +487,7 @@ impl Simulation {
         let tuning = self.tuning;
         let size = self.between(spawn.size) * tuning.size;
         let alpha = self.between(spawn.alpha) * tuning.alpha;
-        let color = self.within(spawn.color);
+        let color = self.along(spawn.color);
         let rotation = self.within(spawn.rotation);
         let born = Look { size, alpha, color };
         let mut velocity = self.within(spawn.velocity);
@@ -588,6 +588,13 @@ impl Simulation {
             *value = range.low[axis] + (range.high[axis] - range.low[axis]) * along;
         }
         out
+    }
+
+    /// One point on the line between a range's ends, as a colour is picked: a stock snow that
+    /// runs from white to grey falls in greys, not in every colour between.
+    fn along(&mut self, range: Between<[f32; 3]>) -> [f32; 3] {
+        let along = self.unit().powf(range.exponent);
+        [0, 1, 2].map(|axis| range.low[axis] + (range.high[axis] - range.low[axis]) * along)
     }
 }
 
@@ -1067,6 +1074,26 @@ mod tests {
         let before = trail.particles().to_vec();
         trail.seek(2.0);
         assert_eq!(trail.particles(), &before[..]);
+    }
+
+    #[test]
+    fn colours_are_picked_between_their_ends_not_a_channel_at_a_time() {
+        let snow = system(&FOUNTAIN.replace(
+            r#"{"name": "lifetimerandom", "min": 1, "max": 1},"#,
+            r#"{"name": "lifetimerandom", "min": 1, "max": 1},
+               {"name": "colorrandom", "min": "255 255 255", "max": "0 0 0"},"#,
+        ));
+        let mut simulation = Simulation::new(snow, 2);
+        simulation.advance(0.5);
+        assert!(simulation.particles().len() > 5);
+        for particle in simulation.particles() {
+            let [r, g, b] = particle.color;
+            assert!(
+                (r - g).abs() < 1e-6 && (g - b).abs() < 1e-6,
+                "{:?}",
+                particle.color
+            );
+        }
     }
 
     #[test]

@@ -82,7 +82,9 @@ rest, by scenes:
 - Big scenes over the 512 MiB texture budget, since DXT textures are decoded to RGBA.
 
 Guesses it confirmed: pictures carry the clamp flag; particle key names; `VERSION` being the
-only combo on most plain image materials.
+only combo on most plain image materials; a random colour (`colorrandom`) picked at one point
+between its ends, not a channel at a time (a stock snow from white to grey that came out in
+every colour shows white and grey in its preview).
 
 ## The road past linux-wallpaperengine
 
