@@ -727,8 +727,12 @@ fn refuse(what: &str) -> Error {
 /// One of a system's renderers.
 fn drawn_by(renderer: &Value) -> Result<Renderer, Error> {
     match text(renderer.get("name")) {
+        // Facing the screen, the one way sprites are drawn here.
         Some("sprite") => {
-            known(renderer, &[], "sprite renderer")?;
+            known(renderer, &["orientation"], "sprite renderer")?;
+            if text(renderer.get("orientation")).is_some_and(|facing| facing != "screen") {
+                return Err(refuse("sprites facing another way than the screen"));
+            }
             Ok(Renderer::Sprite)
         }
         Some("spritetrail") => {

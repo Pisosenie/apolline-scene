@@ -95,7 +95,7 @@ rest, by scenes:
   `blend`, or added from rest when `additive`, at `rate`), placed through its parents, and
   each corner follows its bones by weight. The mesh is drawn in place of the layer's quad,
   showing the layer's picture after its effects, which work on the flat picture. Version 23
-  skeletons and models without animations are refused.
+  skeletons are refused.
 - Camera zoom (`general.zoom`), 3: drawn as the whole scene scaled about its middle, nearer
   above 1. One scene's preview matches it unzoomed, so which way it goes is a guess from a
   scene that animates it from 3 down to 1 as an opening; animated zooms aren't

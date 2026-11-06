@@ -147,8 +147,11 @@ impl Project {
             Some("normal" | "disabled") => Blending::Opaque,
             Some(_) => return Err(Error::Format("unsupported particle blending".into())),
         };
+        // Slots left empty after the first say nothing.
         let texture = match names(pass.get("textures"))?.as_slice() {
-            [Some(name)] => self.texture(name, resources, remaining, false)?,
+            [Some(name), rest @ ..] if rest.iter().all(Option::is_none) => {
+                self.texture(name, resources, remaining, false)?
+            }
             _ => {
                 return Err(Error::Format(
                     "a particle material needs one texture".into(),
