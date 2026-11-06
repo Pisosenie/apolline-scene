@@ -245,6 +245,16 @@ pub(super) fn bind(
         if stage == Stage::Vertex && name == "g_ModelViewProjectionMatrix" && kind == "mat4" {
             continue;
         }
+        // Where the layer is on screen, turned around: from the screen back to the pass's
+        // own units, or to its picture's.
+        if kind == "mat4"
+            && matches!(
+                name,
+                "g_ModelViewProjectionMatrixInverse" | "g_EffectTextureProjectionMatrixInverse"
+            )
+        {
+            continue;
+        }
         if kind == "float" && matches!(name, "g_Time" | "g_Frametime") {
             animated = true;
             continue;

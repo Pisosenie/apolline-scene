@@ -179,6 +179,10 @@ struct Program {
     uv_at: Option<glow::UniformLocation>,
     uv_sides: Option<glow::UniformLocation>,
     mvp: Option<glow::UniformLocation>,
+    /// The inverses of where the layer is on screen, in the pass's own units and in its
+    /// picture's.
+    unproject: Option<glow::UniformLocation>,
+    unproject_picture: Option<glow::UniformLocation>,
     layer_size: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
     channels: Option<glow::UniformLocation>,
@@ -426,7 +430,14 @@ impl Renderer {
             gl.blend_equation(glow::FUNC_ADD);
             for layer in self.layers.iter().filter(|layer| layer.visible) {
                 if let Some(chain) = &layer.chain {
-                    chain.run(gl, &self.programs, target, time, delta, &self.inputs);
+                    let (placed, _) = self.placed(layer, shift, target, fit);
+                    let at = chain::Moment {
+                        screen: target,
+                        time,
+                        delta,
+                        placed,
+                    };
+                    chain.run(gl, &self.programs, at, &self.inputs);
                 }
             }
             host.bind(gl);
@@ -455,20 +466,7 @@ impl Renderer {
                     }
                     current_program = Some(layer.step.program);
                 }
-                let moved = [shift[0] * layer.depth[0], shift[1] * layer.depth[1]];
-                let origin = [layer.origin[0] + moved[0], layer.origin[1] + moved[1]];
-                let (affine, size) = match &layer.swarm {
-                    // Particles are placed in scene units over the whole scene.
-                    Some(_) => {
-                        let centre = [self.size.0 / 2.0 + moved[0], self.size.1 / 2.0 + moved[1]];
-                        let whole = place_fitted(self.size, target, centre, self.size, 0.0, fit);
-                        (whole, self.size)
-                    }
-                    None => (
-                        place_fitted(self.size, target, origin, layer.size, layer.angle, fit),
-                        layer.size,
-                    ),
-                };
+                let (affine, size) = self.placed(layer, shift, target, fit);
                 match layer.blending {
                     Blending::Opaque => gl.disable(glow::BLEND),
                     Blending::Translucent => {
@@ -480,7 +478,16 @@ impl Renderer {
                         gl.blend_func(glow::SRC_ALPHA, glow::ONE);
                     }
                 }
-                bind(gl, program, &layer.step, &affine, size, layer.tint, None);
+                bind(
+                    gl,
+                    program,
+                    &layer.step,
+                    &affine,
+                    &affine,
+                    size,
+                    layer.tint,
+                    None,
+                );
                 match &layer.swarm {
                     Some(swarm) => {
                         let scale = [layer.size.0, layer.size.1];
@@ -498,6 +505,32 @@ impl Renderer {
             gl.color_mask(true, true, true, true);
             gl.bind_vertex_array(None);
             host.restore(gl);
+        }
+    }
+
+    /// Where a layer is on a target this size, with the parallax `shift`, and its size.
+    fn placed(
+        &self,
+        layer: &Drawn,
+        shift: [f32; 2],
+        target: (u32, u32),
+        fit: Fit,
+    ) -> (Affine, (f32, f32)) {
+        let moved = [shift[0] * layer.depth[0], shift[1] * layer.depth[1]];
+        match &layer.swarm {
+            // Particles are placed in scene units over the whole scene.
+            Some(_) => {
+                let centre = [self.size.0 / 2.0 + moved[0], self.size.1 / 2.0 + moved[1]];
+                let whole = place_fitted(self.size, target, centre, self.size, 0.0, fit);
+                (whole, self.size)
+            }
+            None => {
+                let origin = [layer.origin[0] + moved[0], layer.origin[1] + moved[1]];
+                (
+                    place_fitted(self.size, target, origin, layer.size, layer.angle, fit),
+                    layer.size,
+                )
+            }
         }
     }
 
@@ -527,16 +560,28 @@ impl Renderer {
 ///
 /// # Safety
 /// The GL context and the step's program must be current on this thread.
+/// `affine` draws the step and `placed` is where its layer is on screen, which is the same
+/// unless the step draws into one of the layer's effect targets.
+#[allow(clippy::too_many_arguments)]
 unsafe fn bind(
     gl: &glow::Context,
     program: &Program,
     step: &Step,
     affine: &Affine,
+    placed: &Affine,
     size: (f32, f32),
     tint: [f32; 4],
     before: Option<&Input>,
 ) {
     unsafe {
+        if program.unproject.is_some() {
+            let back = material::inverse(material::model_view_projection(placed, size));
+            gl.uniform_matrix_4_f32_slice(program.unproject.as_ref(), false, &back);
+        }
+        if program.unproject_picture.is_some() {
+            let back = material::inverse(material::picture_projection(placed));
+            gl.uniform_matrix_4_f32_slice(program.unproject_picture.as_ref(), false, &back);
+        }
         gl.uniform_3_f32_slice(program.row0.as_ref(), &affine[0]);
         gl.uniform_3_f32_slice(program.row1.as_ref(), &affine[1]);
         gl.uniform_2_f32_slice(program.uv_max.as_ref(), &step.uv_max);
@@ -612,6 +657,8 @@ unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Pr
                 uv_at,
                 uv_sides,
                 mvp: None,
+                unproject: None,
+                unproject_picture: None,
                 layer_size: uniform("apolline_layer_size"),
                 tint,
                 channels: uniform("picture_channels"),

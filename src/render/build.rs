@@ -254,11 +254,15 @@ impl<'a> Builder<'a> {
                 keys: pass.fragment.keys.clone(),
             });
         }
+        // Effects that read where the layer is on screen draw again as it moves.
         let animated = steps.iter().any(|step| {
-            renderer.programs[step.program]
+            let program = &renderer.programs[step.program];
+            program
                 .frame
                 .as_ref()
                 .is_some_and(material::Frame::animated)
+                || program.unproject.is_some()
+                || program.unproject_picture.is_some()
         });
         reserve(
             &mut self.allocated,

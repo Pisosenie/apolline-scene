@@ -152,7 +152,8 @@ impl Survey {
                 }
             }
         }
-        match opened.prepare() {
+        // As apolline-wall prepares them: it moves the pointer.
+        match opened.prepare_pointed() {
             Ok(_) => self.prepared += 1,
             Err(err) => {
                 let class = class(&err.to_string());

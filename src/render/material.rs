@@ -40,6 +40,9 @@ pub(super) unsafe fn program(gl: &glow::Context, fragment: &Fragment) -> Result<
             uv_at: None,
             uv_sides: None,
             mvp: gl.get_uniform_location(id, "g_ModelViewProjectionMatrix"),
+            unproject: gl.get_uniform_location(id, "g_ModelViewProjectionMatrixInverse"),
+            unproject_picture: gl
+                .get_uniform_location(id, "g_EffectTextureProjectionMatrixInverse"),
             layer_size: gl.get_uniform_location(id, "apolline_layer_size"),
             tint: gl.get_uniform_location(id, "apolline_layer_tint"),
             channels: None,
@@ -73,6 +76,44 @@ void main() {{
     v_TexCoord = {varying};
 }}"
     )
+}
+
+/// A placement's matrix turned around, from the screen back to where it came from. A
+/// placement only scales, turns and moves in the screen's plane.
+pub(super) fn inverse(matrix: [f32; 16]) -> [f32; 16] {
+    let [a, b, c, d] = [matrix[0], matrix[1], matrix[4], matrix[5]];
+    let [x, y] = [matrix[12], matrix[13]];
+    let det = a * d - b * c;
+    let det = if det.abs() < 1e-12 {
+        1e-12f32.copysign(det)
+    } else {
+        det
+    };
+    let [ia, ib, ic, id] = [d / det, -b / det, -c / det, a / det];
+    [
+        ia,
+        ib,
+        0.0,
+        0.0, //
+        ic,
+        id,
+        0.0,
+        0.0, //
+        0.0,
+        0.0,
+        1.0,
+        0.0, //
+        -(ia * x + ic * y),
+        -(ib * x + id * y),
+        0.0,
+        1.0,
+    ]
+}
+
+/// The matrix that takes a layer's picture, from -1 to 1 each way with y up, to where the
+/// layer is on screen.
+pub(super) fn picture_projection(affine: &super::Affine) -> [f32; 16] {
+    model_view_projection(affine, (2.0, 2.0))
 }
 
 /// The layer's placement as a matrix for `mul(vec4(a_Position, 1.0), M)`, with `a_Position`
@@ -271,6 +312,36 @@ mod tests {
                 let want = |row: [f32; 3]| row[0] * local[0] + row[1] * local[1] + row[2];
                 assert!((x - want(affine[0])).abs() < 1e-5 && (y - want(affine[1])).abs() < 1e-5);
             }
+        }
+    }
+
+    #[test]
+    fn the_inverses_take_the_screen_back_to_the_pass_and_the_picture() {
+        // Turned, stretched and moved off centre.
+        let affine = [[0.4, -0.3, 0.1], [0.2, 0.5, -0.2]];
+        let apply = |m: &[f32; 16], p: [f32; 2]| {
+            [
+                m[0] * p[0] + m[4] * p[1] + m[12],
+                m[1] * p[0] + m[5] * p[1] + m[13],
+            ]
+        };
+        let screen = |local: [f32; 2]| {
+            let row = |row: [f32; 3]| row[0] * local[0] + row[1] * local[1] + row[2];
+            [row(affine[0]), row(affine[1])]
+        };
+        let back = inverse(model_view_projection(&affine, (300.0, 200.0)));
+        let picture = inverse(picture_projection(&affine));
+        for local in [[0.5f32, 0.5], [-0.5, 0.25], [0.1, -0.4]] {
+            let pass = apply(&back, screen(local));
+            assert!(
+                (pass[0] - local[0] * 300.0).abs() < 1e-3
+                    && (pass[1] - local[1] * 200.0).abs() < 1e-3
+            );
+            // The picture's corners are -1 and 1, y up.
+            let seen = apply(&picture, screen(local));
+            assert!(
+                (seen[0] - 2.0 * local[0]).abs() < 1e-5 && (seen[1] - 2.0 * local[1]).abs() < 1e-5
+            );
         }
     }
 }

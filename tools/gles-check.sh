@@ -19,7 +19,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 cargo build --quiet --example view --manifest-path "$root/Cargo.toml"
 view=${CARGO_TARGET_DIR:-$root/target}/debug/examples/view
-projects=(demo fragment mask wave vertex effect effect-script animation sprite values particle inputs script text dialect)
+projects=(demo fragment mask wave vertex effect effect-script animation sprite pointer values particle inputs script text dialect)
 python3 "$root/tools/demo-scene.py" "$work/demo" > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/fragment" --fragment-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/mask" --mask-demo > /dev/null
@@ -29,6 +29,7 @@ python3 "$root/tools/demo-scene.py" "$work/effect" --effect-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/effect-script" --effect-script-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/animation" --animation-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/sprite" --sprite-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/pointer" --pointer-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/inputs" --inputs-demo > /dev/null
@@ -137,7 +138,7 @@ for project in "${projects[@]}"; do
     echo "$project: first pixel $pixel"
 done
 # Hashes differ between drivers, but these demos have to draw what the plain one does on each.
-for project in vertex effect effect-script animation inputs script; do
+for project in vertex effect effect-script animation pointer inputs script; do
     cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done
 # A frame read from inside a sprite sheet rounds its way to the picture a little differently.

@@ -203,7 +203,13 @@ Wallpaper Engine file has been read yet.
   left, a guess), `g_Daytime` from `Renderer::set_daytime`, and the audio spectrum in 16,
   32 and 64 bins a side from `Renderer::set_spectrum`, silent until a host gives one.
   `Renderer::needs` says which a scene uses. `prepare` refuses pointer readers as it does
-  pointer parallax, since no host feeds the pointer yet; a snapshot sees it at the centre.
+  pointer parallax, for hosts that don't move the pointer; `prepare_pointed` takes them for
+  hosts that do, through `Renderer::follow`, and apolline-wall does: on Wayland from the seat
+  while the pointer is over the desktop, on X11 by asking each frame, on GNOME (whose window
+  lets clicks through) left at the centre. Effects that follow the pointer, like xray, get
+  where their layer is on screen turned around: `g_EffectTextureProjectionMatrixInverse` from
+  the screen to the layer's picture, -1 to 1 with y up, and
+  `g_ModelViewProjectionMatrixInverse` to the pass's own units.
 - Particles (D1–D3): box and sphere emitters; lifetime, size, alpha, colour, velocity,
   rotation and spin initializers; movement, angular movement, alpha fade, size, alpha and
   colour change operators; one sprite renderer with the plain `genericparticle` material.

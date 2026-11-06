@@ -258,6 +258,12 @@ impl Project {
         self.prepare_inner(false)
     }
 
+    /// For hosts that move the pointer with `Renderer::follow`: pointer parallax and shaders
+    /// that read the pointer are drawn, seeing it at the centre until the host first moves it.
+    pub fn prepare_pointed(&self) -> Result<Prepared, Error> {
+        self.prepare_inner(true)
+    }
+
     /// A complete deterministic frame; pointer parallax and shaders that read the pointer see
     /// it at the centre until the host moves it with `Renderer::follow`.
     pub fn prepare_snapshot(&self) -> Result<Prepared, Error> {

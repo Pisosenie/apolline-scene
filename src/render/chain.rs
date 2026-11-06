@@ -32,6 +32,16 @@ pub(super) struct Pass {
     pub keys: Vec<Option<String>>,
 }
 
+/// What a run of the chain is drawn for: the screen, the time, and where the layer is on the
+/// screen, which effects that follow the pointer read.
+#[derive(Clone, Copy)]
+pub(super) struct Moment {
+    pub screen: (u32, u32),
+    pub time: f32,
+    pub delta: f32,
+    pub placed: super::Affine,
+}
+
 /// Draws a whole target, with its top row first like an uploaded texture's.
 const WHOLE: super::Affine = [[2.0, 0.0, 0.0], [0.0, -2.0, 0.0]];
 
@@ -146,11 +156,15 @@ impl Chain {
         &self,
         gl: &glow::Context,
         programs: &[Program],
-        screen: (u32, u32),
-        time: f32,
-        delta: f32,
+        at: Moment,
         inputs: &super::material::Inputs,
     ) {
+        let Moment {
+            screen,
+            time,
+            delta,
+            placed,
+        } = at;
         if self.drawn.get() == Some(screen) && !self.animated {
             return;
         }
@@ -181,7 +195,16 @@ impl Chain {
                     texture: self.targets[(at - 1) % 2].texture,
                     resolution,
                 });
-                super::bind(gl, program, step, &WHOLE, whole, [1.0; 4], before.as_ref());
+                super::bind(
+                    gl,
+                    program,
+                    step,
+                    &WHOLE,
+                    &placed,
+                    whole,
+                    [1.0; 4],
+                    before.as_ref(),
+                );
                 gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             }
         }

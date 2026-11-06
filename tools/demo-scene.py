@@ -17,6 +17,7 @@ demos.add_argument("--effect-demo", action="store_true", help="put effects on th
 demos.add_argument("--effect-script-demo", action="store_true", help="the effect demo with a black tint and inversions in the wrong places, which scripts put right")
 demos.add_argument("--animation-demo", action="store_true", help="the effect demo with the brick misplaced, the glow dimmed and the tint black, which timelines put right by the first second")
 demos.add_argument("--sprite-demo", action="store_true", help="make the sun a sprite sheet of junk, the sun turned in the sheet and the sun, which shows from 1 s")
+demos.add_argument("--pointer-demo", action="store_true", help="an effect on the turned sun that finds where the pointer, at rest mid-screen, is on the sun's picture, and turns it red unless that's where it is")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -249,6 +250,44 @@ if args.sprite_demo:
     frames += struct.pack("<if6f", 0, 1.0, 34, 0, 16, 0, 0, 16)
     files["materials/sun.tex"] = tex(0, 50, 16, pixels, flags=2 | 4) + frames
     files["materials/sun.json"] = b'{"passes": [{"shader": "genericimage2", "textures": ["sun"], "blending": "translucent", "combos": {"VERSION": 2, "SPRITESHEET": 1}}]}'
+if args.pointer_demo:
+    # The pointer rests mid-screen: where that is on the sun, which is moved and turned, both
+    # as the picture's -1..1 and in the pass's own pixels of its 16 by 16 texture.
+    turn, dx, dy = 0.3, 960 - 1400, 540 - 800
+    local = ((math.cos(turn) * dx + math.sin(turn) * dy) / 300, (-math.sin(turn) * dx + math.cos(turn) * dy) / 300)
+    picture, pixels = (2 * local[0], 2 * local[1]), (16 * local[0], 16 * local[1])
+    scene = json.loads(files["scene.json"])
+    scene["objects"][1]["effects"] = [{"file": "effects/pointed/effect.json"}]
+    files["scene.json"] = json.dumps(scene).encode()
+    files["effects/pointed/effect.json"] = b'{"name": "pointed", "passes": [{"material": "materials/effects/pointed.json"}]}'
+    files["materials/effects/pointed.json"] = b'{"passes": [{"shader": "effects/pointed", "textures": [null]}]}'
+    files["shaders/effects/pointed.vert"] = b'''attribute vec3 a_Position;
+attribute vec2 a_TexCoord;
+uniform mat4 g_ModelViewProjectionMatrix;
+uniform mat4 g_ModelViewProjectionMatrixInverse;
+uniform mat4 g_EffectTextureProjectionMatrixInverse;
+uniform vec2 g_PointerPosition;
+varying vec2 v_TexCoord;
+varying vec4 v_Pointer;
+void main() {
+    gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+    v_TexCoord = a_TexCoord;
+    vec2 pointer = g_PointerPosition;
+    pointer.y = 1.0 - pointer.y;
+    vec4 screen = vec4(pointer * 2.0 - 1.0, 0.0, 1.0);
+    v_Pointer.xy = mul(screen, g_EffectTextureProjectionMatrixInverse).xy;
+    v_Pointer.zw = mul(screen, g_ModelViewProjectionMatrixInverse).xy;
+}
+'''
+    files["shaders/effects/pointed.frag"] = (f"""varying vec2 v_TexCoord;
+varying vec4 v_Pointer;
+uniform sampler2D g_Texture0;
+void main() {{
+    bool right = distance(v_Pointer.xy, vec2({picture[0]:.6f}, {picture[1]:.6f})) < 0.01
+        && distance(v_Pointer.zw, vec2({pixels[0]:.6f}, {pixels[1]:.6f})) < 0.1;
+    gl_FragColor = right ? texSample2D(g_Texture0, v_TexCoord) : vec4(1.0, 0.0, 0.0, 1.0);
+}}
+""").encode()
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'
