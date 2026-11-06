@@ -68,6 +68,36 @@ pub struct Layer {
     pub text: Option<Arc<crate::text::Lettering>>,
 }
 
+/// Whether anything moves object `at` once the scene runs: a timeline or a script on its own
+/// or its parents' place, or a script that looks layers up by name.
+fn moves(scene: &Scene, at: usize) -> bool {
+    let mut lineage = vec![at];
+    while let Some(parent) = scene
+        .tree
+        .get(*lineage.last().unwrap_or(&at))
+        .and_then(|node| node.parent)
+    {
+        if lineage.contains(&parent) || lineage.len() > 32 {
+            break;
+        }
+        lineage.push(parent);
+    }
+    let placing = |object: usize, target: &crate::scene::Target| {
+        lineage.contains(&object)
+            && matches!(
+                target,
+                crate::scene::Target::Object("origin" | "angles" | "scale")
+            )
+    };
+    scene
+        .animations
+        .iter()
+        .any(|animated| placing(animated.object, &animated.target))
+        || scene.scripts.iter().any(|script| {
+            placing(script.object, &script.target) || script.source.contains("getLayer")
+        })
+}
+
 /// A layer without its hidden effects that read the pointer, which are left as ones that
 /// can't be drawn.
 fn unpointed(layer: Layer) -> Layer {
@@ -383,7 +413,20 @@ impl Project {
                 ),
                 Object::Particles(particles) => (
                     &particles.name,
-                    self.particle_layer(particles, &mut textures, &mut remaining),
+                    self.particle_layer(particles, &mut textures, &mut remaining)
+                        .and_then(|layer| {
+                            // Worldspace particles stay put while their system moves, which
+                            // isn't drawn; one that never moves draws the same either way.
+                            if layer.particles.as_ref().is_some_and(|system| system.world)
+                                && moves(scene, at)
+                            {
+                                return Err(Error::Format(
+                                    "worldspace particles on a moving layer need another renderer"
+                                        .into(),
+                                ));
+                            }
+                            Ok(layer)
+                        }),
                 ),
                 _ => continue,
             };

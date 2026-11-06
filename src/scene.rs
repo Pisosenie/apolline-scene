@@ -23,6 +23,8 @@ pub struct Scene {
     pub perspective: bool,
     pub clear: [f32; 3],
     pub parallax: Option<Parallax>,
+    /// How wide the camera sees up and down, in degrees, for what's drawn in perspective.
+    pub fov: f32,
     pub objects: Vec<Object>,
     /// Scripts on objects' places and looks and on their effects, in the order they run.
     pub scripts: Vec<Script>,
@@ -273,6 +275,9 @@ impl Scene {
             perspective: size.is_none(),
             clear: vector(field("clearcolor"), [0.0; 3]),
             parallax,
+            fov: number(field("fov"))
+                .filter(|fov| *fov > 1.0 && *fov < 170.0)
+                .unwrap_or(50.0),
             driven: effects::driven(&scripts, &animations),
             scripts,
             animations,

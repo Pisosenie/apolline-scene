@@ -110,6 +110,11 @@ impl Simulation {
         }
     }
 
+    /// Whether its particles are drawn in perspective.
+    pub fn perspective(&self) -> bool {
+        self.system.perspective
+    }
+
     pub fn particles(&self) -> &[Particle] {
         &self.particles
     }

@@ -15,7 +15,16 @@ pub struct System {
     pub emitters: Vec<Emitter>,
     pub spawn: Spawn,
     pub operators: Vec<Operator>,
+    /// Its particles stay where they were let out when the system moves.
+    pub world: bool,
+    /// Its particles are drawn in perspective: nearer ones bigger and further from the
+    /// middle of the scene.
+    pub perspective: bool,
 }
+
+/// The system flags that are drawn: worldspace and perspective rendering.
+const WORLD: u32 = 1;
+const PERSPECTIVE: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
@@ -156,9 +165,11 @@ impl System {
 
     pub fn from_value(root: &Value) -> Result<Self, Error> {
         known(root, ROOT, "particle system")?;
-        if number(root.get("flags")).is_some_and(|flags| flags != 0.0) {
+        let flags = number(root.get("flags")).unwrap_or(0.0);
+        if flags < 0.0 || flags.fract() != 0.0 || flags as u32 & !(WORLD | PERSPECTIVE) != 0 {
             return Err(refuse("particle system flags"));
         }
+        let flags = flags as u32;
         // Sprite sheets and child systems; control points matter only to the operators that
         // follow them, which are refused on their own.
         if root
@@ -209,6 +220,8 @@ impl System {
             emitters,
             spawn,
             operators,
+            world: flags & WORLD != 0,
+            perspective: flags & PERSPECTIVE != 0,
         })
     }
 }
@@ -421,6 +434,23 @@ mod tests {
         assert_eq!((system.spawn.life.low, system.spawn.life.high), (2.0, 3.0));
         assert_eq!(system.spawn.color.high, [128.0 / 255.0, 128.0 / 255.0, 1.0]);
         assert_eq!(system.operators.len(), 2);
+        assert!(!system.world && !system.perspective);
+        // Worldspace is 1 and perspective rendering 4; 2 isn't drawn yet.
+        let flagged = |flags: u32| {
+            System::parse(&RAIN.replace(
+                r#""starttime": 2"#,
+                &format!(r#""starttime": 2, "flags": {flags}"#),
+            ))
+        };
+        let both = flagged(5).unwrap();
+        assert!(both.world && both.perspective);
+        assert!(
+            flagged(2)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("particle system flags")
+        );
     }
 
     #[test]

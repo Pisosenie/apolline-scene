@@ -102,26 +102,39 @@ impl Swarm {
     ///
     /// # Safety
     /// The GL context must be current on this thread.
+    /// `camera` is the middle of the scene and how far in front of it the camera is, which
+    /// a system drawn in perspective is seen from.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn update(
         &self,
         gl: &glow::Context,
         time: f32,
         origin: [f32; 2],
-        scale: [f32; 2],
+        scale: [f32; 3],
         angle: f32,
+        camera: ([f32; 2], f32),
     ) -> i32 {
         let mut simulation = self.simulation.borrow_mut();
         simulation.seek(time);
+        let perspective = simulation.perspective();
         let particles = simulation.particles();
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
         let (sin, cos) = angle.sin_cos();
+        let (middle, distance) = camera;
         for particle in particles {
             let x = particle.position[0] * scale[0];
             let y = particle.position[1] * scale[1];
+            let at = [origin[0] + cos * x - sin * y, origin[1] + sin * x + cos * y];
+            let depth = if perspective {
+                particle.position[2] * scale[2]
+            } else {
+                0.0
+            };
+            let (at, near) = seen(at, depth, middle, distance);
             for value in [
-                origin[0] + cos * x - sin * y,
-                origin[1] + sin * x + cos * y,
-                particle.size * scale[0].abs(),
+                at[0],
+                at[1],
+                particle.size * scale[0].abs() * near,
                 particle.rotation + angle,
                 particle.color[0],
                 particle.color[1],
@@ -146,5 +159,43 @@ impl Swarm {
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.buffer);
         }
+    }
+}
+
+/// Where a point `depth` in front of the scene is seen from a camera `distance` in front of its
+/// `middle`, and how much bigger it looks: nearer is bigger and further out, and at or behind
+/// the camera it's nothing.
+fn seen(at: [f32; 2], depth: f32, middle: [f32; 2], distance: f32) -> ([f32; 2], f32) {
+    let ahead = distance - depth;
+    let near = if ahead > distance * 0.01 {
+        distance / ahead
+    } else {
+        0.0
+    };
+    (
+        [
+            middle[0] + (at[0] - middle[0]) * near,
+            middle[1] + (at[1] - middle[1]) * near,
+        ],
+        near,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seen;
+
+    #[test]
+    fn nearer_particles_look_bigger_and_further_out() {
+        let middle = [100.0, 50.0];
+        assert_eq!(
+            seen([150.0, 50.0], 0.0, middle, 1000.0),
+            ([150.0, 50.0], 1.0)
+        );
+        let (at, near) = seen([150.0, 50.0], 500.0, middle, 1000.0);
+        assert_eq!((at, near), ([200.0, 50.0], 2.0));
+        let (_, away) = seen([150.0, 50.0], -1000.0, middle, 1000.0);
+        assert_eq!(away, 0.5);
+        assert_eq!(seen([150.0, 50.0], 1000.0, middle, 1000.0).1, 0.0);
     }
 }

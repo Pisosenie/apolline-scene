@@ -94,3 +94,39 @@ fn an_instance_scales_its_system_and_unknown_overrides_are_refused() {
     assert!(refused.contains("override wobble"), "{refused}");
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+#[test]
+fn worldspace_particles_draw_on_a_layer_that_stays_put() {
+    let folder = scene(
+        "particles-worldspace",
+        r#"{"passes":[{"shader":"genericparticle","textures":["particle/flake"]}]}"#,
+    );
+    std::fs::write(
+        folder.join("particles/snow.json"),
+        r#"{"material":"materials/particle/flake.json","maxcount":20,"flags":1,
+            "emitter":[{"name":"boxrandom","rate":10}],"renderer":[{"name":"sprite"}]}"#,
+    )
+    .unwrap();
+    let project = Project::open(&folder, None).unwrap();
+    assert!(
+        project.prepare().unwrap().layers[1]
+            .particles
+            .as_ref()
+            .unwrap()
+            .world
+    );
+    // A timeline moving it leaves its particles behind, which isn't drawn.
+    std::fs::write(
+        folder.join("scene.json"),
+        r#"{"general":{"orthogonalprojection":{"width":10,"height":10}},"objects":[
+            {"name":"snow","particle":"particles/snow.json","origin":{"value":"5 10 0",
+             "animation":{"c0":[{"frame":0,"value":0},{"frame":10,"value":5}],"options":{"fps":30,"length":10}}}}]}"#,
+    )
+    .unwrap();
+    let refused = project.prepare().err().unwrap().to_string();
+    assert!(
+        refused.contains("worldspace particles on a moving layer"),
+        "{refused}"
+    );
+    std::fs::remove_dir_all(folder).unwrap();
+}

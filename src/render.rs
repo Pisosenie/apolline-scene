@@ -198,6 +198,9 @@ pub struct Renderer {
     size: (f32, f32),
     clear: [f32; 3],
     parallax: Option<Parallax>,
+    /// How far in front of the scene its camera is, in scene pixels, for what's drawn in
+    /// perspective.
+    camera: f32,
     /// Where the parallax has got to on its way to the pointer, -1..1 across the target.
     eye: [f32; 2],
     inputs: Box<material::Inputs>,
@@ -232,6 +235,7 @@ impl Renderer {
             size: scene.size,
             clear: scene.clear,
             parallax: scene.parallax,
+            camera: scene.size.1 / 2.0 / (scene.fov.to_radians() / 2.0).tan(),
             eye: [0.0; 2],
             inputs: Box::default(),
             stage: None,
@@ -489,8 +493,11 @@ impl Renderer {
                 );
                 match &layer.swarm {
                     Some(swarm) => {
-                        let scale = [layer.size.0, layer.size.1];
-                        let count = swarm.update(gl, time, layer.origin, scale, layer.angle);
+                        let scale = [layer.size.0, layer.size.1, layer.size.0];
+                        let middle = [self.size.0 / 2.0, self.size.1 / 2.0];
+                        let camera = (middle, self.camera);
+                        let count =
+                            swarm.update(gl, time, layer.origin, scale, layer.angle, camera);
                         gl.bind_vertex_array(Some(swarm.vao));
                         gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
                         // The next layer may share the program but not these instances.
