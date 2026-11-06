@@ -65,7 +65,11 @@ result) is reused by all layers that reference it. Layer transforms remain indep
 textures are still shared through Arc. The cache is local to that preparation: editing files
 or changing property values is observed on the next call, without a long-lived stale cache.
 Models retain independent placement; their full material result (including blending, defaults
-and errors) is reused by resource path during one preparation.
+and errors) is reused by resource path during one preparation. A layer's `instance` changes
+its material's one pass for it alone: its combos and values are added to the material's, each
+texture it names takes that slot, and its user textures replace the material's (album art and
+unchosen pictures leave the material's, as elsewhere). Such a layer's model and material are
+reused only by layers with the same instance.
 
 The native still path rejects animated texture flags and multiple image records while reading
 headers, before allocating or decompressing their pixels. The general texture reader retains

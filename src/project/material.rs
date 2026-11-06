@@ -1,5 +1,6 @@
 use super::*;
 use crate::shader::{Fragment, Template};
+use serde_json::Map;
 
 #[derive(Default)]
 pub(super) struct Resources {
@@ -70,9 +71,11 @@ impl Project {
         returned
     }
 
-    pub(super) fn material(
+    /// Material `name` as a layer's `instance` changes it.
+    pub(super) fn instanced(
         &self,
         name: &str,
+        instance: Option<&Map<String, Value>>,
         resources: &mut Resources,
     ) -> Result<Material, Error> {
         if !relative(name) {
@@ -80,7 +83,11 @@ impl Project {
                 "material path must stay within its resource root".into(),
             ));
         }
-        if let Some(cached) = resources.materials.get(name) {
+        let key = match instance {
+            Some(instance) => format!("{name}\u{0}{}", Value::Object(instance.clone())),
+            None => name.to_owned(),
+        };
+        if let Some(cached) = resources.materials.get(&key) {
             return cached
                 .as_ref()
                 .cloned()
@@ -91,17 +98,27 @@ impl Project {
                 "scene exceeds 4096 material resources".into(),
             ));
         }
-        let result = self.read_material(name, resources).map_err(diagnostic);
+        let result = self
+            .read_material(name, instance, resources)
+            .map_err(diagnostic);
         let returned = result
             .as_ref()
             .cloned()
             .map_err(|message| Error::Format(message.clone()));
-        resources.materials.insert(name.into(), result);
+        resources.materials.insert(key, result);
         returned
     }
 
-    fn read_material(&self, name: &str, resources: &mut Resources) -> Result<Material, Error> {
-        let material = self.json(name)?;
+    fn read_material(
+        &self,
+        name: &str,
+        instance: Option<&Map<String, Value>>,
+        resources: &mut Resources,
+    ) -> Result<Material, Error> {
+        let mut material = self.json(name)?;
+        if let Some(instance) = instance {
+            lay_over(&mut material, instance)?;
+        }
         if scripted(&material) {
             return Err(Error::Format(
                 "a scripted material needs another renderer".into(),
@@ -385,6 +402,71 @@ fn plain(
     Ok((shade, sprite))
 }
 
+/// A layer's `instance` laid over its material's one pass: its combos and values added to the
+/// material's, each texture it names in place of the material's in that slot, and its user
+/// textures in place of the material's.
+fn lay_over(material: &mut Value, instance: &Map<String, Value>) -> Result<(), Error> {
+    if let Some(key) = instance.keys().find(|key| {
+        !matches!(
+            key.as_str(),
+            "combos" | "constantshadervalues" | "id" | "textures" | "usertextures"
+        )
+    }) {
+        let key: String = key.chars().take(64).collect();
+        return Err(Error::Format(format!(
+            "unsupported material instance field {key}"
+        )));
+    }
+    let Some(Value::Object(pass)) = material
+        .get_mut("passes")
+        .and_then(Value::as_array_mut)
+        .filter(|passes| passes.len() == 1)
+        .and_then(|passes| passes.first_mut())
+    else {
+        return Err(Error::Format(
+            "an instance of a material without one pass".into(),
+        ));
+    };
+    for key in ["combos", "constantshadervalues"] {
+        let Some(given) = instance.get(key) else {
+            continue;
+        };
+        let given = given
+            .as_object()
+            .ok_or_else(|| Error::Format(format!("instance {key} must be an object")))?;
+        let own = pass.entry(key).or_insert_with(|| Value::Object(Map::new()));
+        let own = own
+            .as_object_mut()
+            .ok_or_else(|| Error::Format(format!("material {key} must be an object")))?;
+        own.extend(given.clone());
+    }
+    if let Some(given) = instance.get("textures") {
+        let given = given
+            .as_array()
+            .filter(|slots| slots.len() <= 8)
+            .ok_or_else(|| Error::Format("instance textures must be at most eight slots".into()))?;
+        let own = pass
+            .entry("textures")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let own = own
+            .as_array_mut()
+            .ok_or_else(|| Error::Format("material textures must be a list".into()))?;
+        for (slot, name) in given.iter().enumerate() {
+            if name.is_null() {
+                continue;
+            }
+            if own.len() <= slot {
+                own.resize(slot + 1, Value::Null);
+            }
+            own[slot] = name.clone();
+        }
+    }
+    if let Some(given) = instance.get("usertextures") {
+        pass.insert("usertextures".into(), given.clone());
+    }
+    Ok(())
+}
+
 pub(super) fn object(
     value: Option<&Value>,
     count: usize,
@@ -464,4 +546,25 @@ fn texture_file(name: &str) -> Result<String, Error> {
         ));
     }
     Ok(format!("materials/{name}.tex"))
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_instance_adds_values_and_swaps_the_textures_it_names() {
+        let mut material = json!({"passes": [{"shader": "genericimage2", "combos": {"VERSION": 2},
+            "textures": ["util/white", "mask"]}]});
+        let instance = json!({"id": 4, "combos": {"TINT": 1}, "textures": [null, "other"],
+            "usertextures": [{"type": "system", "name": "$mediaThumbnail"}]});
+        lay_over(&mut material, instance.as_object().unwrap()).unwrap();
+        let pass = &material["passes"][0];
+        assert_eq!(pass["combos"], json!({"VERSION": 2, "TINT": 1}));
+        assert_eq!(pass["textures"], json!(["util/white", "other"]));
+        assert_eq!(pass["usertextures"][0]["type"], "system");
+        let odd = json!({"shader": "x"});
+        assert!(lay_over(&mut material, odd.as_object().unwrap()).is_err());
+    }
 }

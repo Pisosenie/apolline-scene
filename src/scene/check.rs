@@ -127,6 +127,7 @@ const IMAGE: &[&str] = &[
     "effects",
     "id",
     "image",
+    "instance",
     "ledsource",
     "locktransforms",
     "name",

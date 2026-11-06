@@ -473,11 +473,22 @@ impl Project {
         remaining: &mut usize,
         still: bool,
     ) -> Result<Layer, Error> {
+        // Layers of one model share it unless their instances change its material.
+        let key = match &image.instance {
+            Some(instance) => format!("{}\u{0}{}", image.model, Value::Object(instance.clone())),
+            None => image.model.clone(),
+        };
         let resolved = models
-            .entry(image.model.clone())
+            .entry(key)
             .or_insert_with(|| {
-                self.resolve(&image.model, textures, remaining, still)
-                    .map_err(diagnostic)
+                self.resolve(
+                    &image.model,
+                    image.instance.as_ref(),
+                    textures,
+                    remaining,
+                    still,
+                )
+                .map_err(diagnostic)
             })
             .as_ref()
             .map_err(|reason| Error::Format(reason.clone()))?
@@ -516,6 +527,7 @@ impl Project {
     fn resolve(
         &self,
         model_name: &str,
+        instance: Option<&serde_json::Map<String, Value>>,
         textures: &mut material::Resources,
         remaining: &mut usize,
         still: bool,
@@ -528,7 +540,7 @@ impl Project {
         }
         let material = text(model.get("material"))
             .ok_or_else(|| Error::Format(format!("{model_name} names no material")))?;
-        let material = self.material(material, textures)?;
+        let material = self.instanced(material, instance, textures)?;
         let names = material.names;
         let fragment = material.fragment;
         let shade = material.shade;

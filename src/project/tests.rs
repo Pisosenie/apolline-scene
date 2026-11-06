@@ -735,14 +735,18 @@ fn complete_material_results_and_errors_are_cached_only_for_one_preparation() {
     .unwrap();
     let project = Project::open(&folder, None).unwrap();
     let mut resources = material::Resources::default();
-    let first = project.material("material.json", &mut resources).unwrap();
+    let first = project
+        .instanced("material.json", None, &mut resources)
+        .unwrap();
     std::fs::remove_file(&file).unwrap();
-    let cached = project.material("material.json", &mut resources).unwrap();
+    let cached = project
+        .instanced("material.json", None, &mut resources)
+        .unwrap();
     assert_eq!(cached.names, first.names);
     assert_eq!(cached.blending, Blending::Opaque);
     let mut failed = material::Resources::default();
     let error = project
-        .material("material.json", &mut failed)
+        .instanced("material.json", None, &mut failed)
         .err()
         .unwrap()
         .to_string();
@@ -753,14 +757,14 @@ fn complete_material_results_and_errors_are_cached_only_for_one_preparation() {
     .unwrap();
     assert_eq!(
         project
-            .material("material.json", &mut failed)
+            .instanced("material.json", None, &mut failed)
             .err()
             .unwrap()
             .to_string(),
         error
     );
     let reloaded = project
-        .material("material.json", &mut material::Resources::default())
+        .instanced("material.json", None, &mut material::Resources::default())
         .unwrap();
     assert_eq!(reloaded.blending, Blending::Additive);
     assert_eq!(reloaded.names, [Some("replacement".into())]);
@@ -848,7 +852,7 @@ fn cached_failure_text_stays_bounded_before_it_is_copied_to_other_models() {
     );
     assert!(
         project
-            .material("material.json", &mut resources)
+            .instanced("material.json", None, &mut resources)
             .err()
             .unwrap()
             .to_string()

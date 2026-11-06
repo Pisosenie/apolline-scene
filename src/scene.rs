@@ -207,6 +207,8 @@ pub struct Image {
     pub depth: [f32; 2],
     /// Its effects in drawing order: those shown, and those hidden that scripts may show.
     pub effects: Vec<Effect>,
+    /// What it changes in its material's pass: combos, values, textures, user textures.
+    pub instance: Option<serde_json::Map<String, Value>>,
 }
 
 impl Image {
@@ -539,6 +541,7 @@ fn picture(value: &Value, model: &str) -> Image {
         visible: flag(field("visible")).unwrap_or(true),
         depth: vector(field("parallaxDepth"), [1.0; 2]),
         effects: effects::listed(field("effects")),
+        instance: field("instance").and_then(Value::as_object).cloned(),
     }
 }
 
