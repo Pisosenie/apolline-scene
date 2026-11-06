@@ -404,7 +404,6 @@ impl Stage {
             };
             let mut effected = None;
             if (!self.shown.is_empty() || self.valued) && values.is_some() {
-                self.allow(FRAME_MS);
                 effected = world
                     .get::<_, Function>("effects")
                     .and_then(|effects| effects.call::<_, Vec<f64>>(()))
@@ -412,7 +411,6 @@ impl Stage {
             }
             let mut written = Vec::new();
             if self.lettered && values.is_some() {
-                self.allow(FRAME_MS);
                 written = world
                     .get::<_, Function>("written")
                     .and_then(|written| written.call::<_, Vec<Vec<String>>>(()))
@@ -450,30 +448,40 @@ impl Stage {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .map(|value| value.map(|number| number as f32))
+                .map(|value| value.map(|number| finite(number as f32)))
                 .collect();
         }
-        for changed in written {
+        // What comes back is the scripts' to make up: only objects the scene has, the last
+        // word for each.
+        let objects = self.locals.len();
+        let mut latest: std::collections::BTreeMap<usize, String> =
+            std::mem::take(&mut self.written).into_iter().collect();
+        for changed in written.iter().take(objects) {
             if let [object, words] = changed.as_slice()
                 && let Ok(object) = object.parse::<usize>()
+                && object < objects
             {
-                let words: String = words.chars().take(crate::text::CHARACTERS).collect();
-                self.written.retain(|(earlier, _)| *earlier != object);
-                self.written.push((object, words));
+                latest.insert(
+                    object,
+                    words.chars().take(crate::text::CHARACTERS).collect(),
+                );
             }
         }
+        self.written = latest.into_iter().collect();
         if let Some(values) = values {
             let (objects, listening) = values.split_at(values.len().saturating_sub(1));
             self.audio |= listening.first().is_some_and(|&on| on != 0.0);
             for (local, values) in self.locals.iter_mut().zip(objects.as_chunks::<STRIDE>().0) {
-                *local = read(values);
+                *local = read(values, local);
             }
             self.poses = pose(&self.locals, &self.tree);
         }
-        // Promises the scripts made settle between frames, against the same kind of deadline.
-        self.allow(FRAME_MS);
+        // Promises the scripts made settle between frames, in a share of a frame of their own;
+        // scripts that keep making more than settle in it stop.
+        self.allow(FRAME_MS / 5);
         while self.runtime.is_job_pending() {
             if self.runtime.execute_pending_job().is_err() {
+                self.stopped |= self.runtime.is_job_pending();
                 break;
             }
         }
@@ -577,23 +585,26 @@ fn state(local: &Local) -> [f64; STRIDE] {
     out
 }
 
-fn read(values: &[f64; STRIDE]) -> Local {
-    let three = |at: usize| {
-        [
-            values[at] as f32,
-            values[at + 1] as f32,
-            values[at + 2] as f32,
-        ]
+/// A script's numbers for an object; one that isn't a number keeps what was there.
+fn read(values: &[f64; STRIDE], before: &Local) -> Local {
+    let one = |at: usize, was: f32| {
+        let value = values[at] as f32;
+        if value.is_finite() { value } else { was }
     };
+    let three = |at: usize, was: [f32; 3]| [0, 1, 2].map(|i| one(at + i, was[i]));
     Local {
-        origin: three(0),
-        scale: three(3),
-        angles: three(6).map(f32::to_radians),
-        color: three(9),
-        alpha: values[12] as f32,
-        brightness: values[13] as f32,
+        origin: three(0, before.origin),
+        scale: three(3, before.scale),
+        angles: three(6, before.angles.map(f32::to_degrees)).map(f32::to_radians),
+        color: three(9, before.color),
+        alpha: one(12, before.alpha),
+        brightness: one(13, before.brightness),
         visible: values[14] != 0.0,
     }
+}
+
+fn finite(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
 }
 
 fn caught(ctx: &Ctx, error: rquickjs::Error) -> String {

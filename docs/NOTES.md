@@ -25,7 +25,7 @@ These are separate allocation limits, not a guarantee that total process RSS sta
 `draw_timed`, with the context current, since new words are drawn into their textures there.
 `Renderer::needs` includes the time of day and audio when scripts read them.
 Scripts that fail to load or throw in their first frame refuse the scene in `prepare`. Each
-renderer has its own QuickJS runtime with a 64 MiB heap, a 1 MiB stack and 50 ms a frame; a
+renderer has its own QuickJS runtime with a 64 MiB heap, a 1 MiB stack and 50 ms a frame (10 more for promises); a
 script cut short or throwing later stops, the rest go on. Scenes with scripts keep hidden
 layers loaded, since a script may show them. `prepare_still` refuses them.
 

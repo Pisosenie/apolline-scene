@@ -390,7 +390,7 @@ fn stage(
 
 /// Words GLSL ES keeps for itself that desktop GL lets a shader name things with, as stock
 /// ones do (`sample` in pulse and the downsamples).
-const RESERVED: [&str; 12] = [
+const RESERVED: [&str; 24] = [
     "sample",
     "filter",
     "input",
@@ -403,6 +403,18 @@ const RESERVED: [&str; 12] = [
     "superp",
     "cast",
     "interface",
+    "class",
+    "union",
+    "enum",
+    "this",
+    "using",
+    "namespace",
+    "template",
+    "external",
+    "goto",
+    "sizeof",
+    "noperspective",
+    "subroutine",
 ];
 
 fn unreserved(source: String) -> Result<String, Error> {
@@ -410,7 +422,9 @@ fn unreserved(source: String) -> Result<String, Error> {
     for word in RESERVED {
         // A uniform keeps its name, since the host binds it by that name.
         let bound = renamed.lines().any(|line| {
-            let mut words = line
+            // Not the annotation after it: `// {"material":"input"}` names no uniform.
+            let code = line.split("//").next().unwrap_or_default();
+            let mut words = code
                 .split(|c: char| !c.is_alphanumeric() && c != '_')
                 .filter(|w| !w.is_empty());
             words.next() == Some("uniform") && words.any(|w| w == word)
@@ -789,6 +803,13 @@ mod tests {
         assert_eq!(
             unreserved(source.to_owned()).unwrap(),
             "uniform sampler2D g_Texture0;\nvec4 sample_apolline = texture(g_Texture0, uv); // sample\nfloat samples = sample_apolline.r;"
+        );
+        // A uniform's annotation names a material key, not the uniform.
+        let annotated =
+            "uniform float g_Amount; // {\"material\":\"input\"}\nfloat input = g_Amount;";
+        assert_eq!(
+            unreserved(annotated.to_owned()).unwrap(),
+            "uniform float g_Amount; // {\"material\":\"input\"}\nfloat input_apolline = g_Amount;"
         );
     }
 

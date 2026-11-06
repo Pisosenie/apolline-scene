@@ -7,6 +7,8 @@ use super::system::{Between, Operator, Shape, Sheet, Swing, System, Tie, Turbule
 /// Simulated in steps of a sixtieth of a second, whatever the frame rate.
 const RATE: f64 = 60.0;
 const STEP: f32 = 1.0 / RATE as f32;
+/// Particle steps a system may take warming up.
+const WARMUP_WORK: u64 = 20_000_000;
 /// A host that falls further behind than this many steps catches up only this far.
 const CATCH_UP: u64 = 60;
 
@@ -191,6 +193,9 @@ impl Simulation {
         self.reset();
         // A follower warms up as long as the system it follows does, which it moves with.
         let warmup = (f64::from(self.warmup()) * RATE).round() as u64;
+        // Warming up happens before the first frame, in one go: a system that could hold many
+        // particles warms up for less time rather than holding the host up.
+        let warmup = warmup.min(WARMUP_WORK / self.room().max(1) as u64);
         for _ in 0..warmup {
             self.step();
         }
@@ -211,7 +216,8 @@ impl Simulation {
             return;
         }
         for at in 0..self.system.emitters.len() {
-            for _ in 0..self.system.emitters[at].burst {
+            let free = self.room().saturating_sub(self.particles.len());
+            for _ in 0..self.system.emitters[at].burst.min(free) {
                 self.emit(at, [0.0; 3], None);
             }
         }
@@ -444,9 +450,14 @@ impl Simulation {
             .collect();
         let mut following = std::mem::take(&mut self.following);
         let emitters = self.system.emitters.len();
+        // Never more turns than there is room: a full system lets nothing more out.
         let burst = |simulation: &mut Simulation, at: [f32; 3], serial: Option<u64>| {
             for emitter in 0..emitters {
-                for _ in 0..simulation.system.emitters[emitter].burst {
+                let free = simulation.room().saturating_sub(simulation.particles.len());
+                if free == 0 {
+                    return;
+                }
+                for _ in 0..simulation.system.emitters[emitter].burst.min(free) {
                     simulation.emit(emitter, at, serial);
                 }
             }

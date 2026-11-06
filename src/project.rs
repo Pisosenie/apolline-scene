@@ -555,6 +555,10 @@ impl Project {
                 let bytes = self
                     .try_file(name, crate::files::RESOURCE_BYTES)?
                     .ok_or_else(|| Error::Format(format!("{name} isn't in the project")))?;
+                // Each model that names a puppet holds a copy of it, about twice the file.
+                *remaining = remaining
+                    .checked_sub(bytes.len().saturating_mul(2))
+                    .ok_or_else(|| Error::Format("scene puppets exceed their budget".into()))?;
                 let puppet = crate::puppet::Puppet::parse(&bytes)
                     .map_err(|error| Error::Format(format!("{name}: {error}")))?;
                 Some(Arc::new(puppet))
