@@ -385,7 +385,33 @@ fn stage(
         }
     }
     let turned = literal::turned(&conditional::select(output, combos)?)?;
-    Ok(dialect::converted(&turned, combos))
+    unreserved(dialect::converted(&turned, combos))
+}
+
+/// Words GLSL ES keeps for itself that desktop GL lets a shader name things with, as stock
+/// ones do (`sample` in pulse and the downsamples).
+const RESERVED: [&str; 12] = [
+    "sample",
+    "filter",
+    "input",
+    "output",
+    "common",
+    "partition",
+    "active",
+    "resource",
+    "patch",
+    "superp",
+    "cast",
+    "interface",
+];
+
+fn unreserved(mut source: String) -> Result<String, Error> {
+    for word in RESERVED {
+        if source.contains(word) {
+            source = rename(&source, word, &format!("{word}_r"))?;
+        }
+    }
+    Ok(source)
 }
 
 /// A stage's whole source: the dialect, its combos, its body and the host's own main.
@@ -736,6 +762,15 @@ void main() {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn words_gles_keeps_are_renamed_and_only_whole() {
+        let source = "vec4 sample = texture(g_Texture0, uv); // sample\nfloat samples = sample.r;";
+        assert_eq!(
+            unreserved(source.to_owned()).unwrap(),
+            "vec4 sample_r = texture(g_Texture0, uv); // sample\nfloat samples = sample_r.r;"
+        );
+    }
 
     fn prepare(source: &str, combos: Value, constants: Value) -> Result<Fragment, Error> {
         Fragment::prepare(
