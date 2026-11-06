@@ -245,7 +245,8 @@ impl<'a> Builder<'a> {
                 index
             }
         };
-        reserve(&mut self.allocated, super::swarm::Swarm::bytes(capacity))?;
+        let instances = capacity * system.renderers.len();
+        reserve(&mut self.allocated, super::swarm::Swarm::bytes(instances))?;
         let seed = renderer.layers.len() as u64;
         let frames = &layer.texture.frames;
         let (width, height) = layer

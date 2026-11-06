@@ -147,7 +147,8 @@ them together, and its own `starttime` gives way to its parent's. Children let o
 particles are born or die (`eventspawn`, `eventdeath`) are still refused. A rope trail
 (`ropetrail`) is drawn as one strip from its particle back along its velocity for `length`
 seconds, or its age if younger, its picture running end to end a width past each: the path it
-came along, straightened. Ropes through a system's particles (`rope`), and rope trails that fade
+came along, straightened. A system may list two renderers, a sprite and a trail behind it,
+and each particle is drawn once by each. Ropes through a system's particles (`rope`), and rope trails that fade
 or bend in segments (`fadealpha`, `segments`, `subdivision`), are still refused. Turbulence is drawn both ways the documentation gives it: a
 turbulent start (`turbulentvelocityrandom`) turns its forward direction by `offset` radians
 (stock leaves fall with 3) and by noise over when each particle is born, up to `scale` half

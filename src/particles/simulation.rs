@@ -327,9 +327,9 @@ impl Simulation {
         }
     }
 
-    /// How its particles are drawn.
-    pub fn renderer(&self) -> crate::particles::Renderer {
-        self.system.renderer
+    /// How its particles are drawn, each once by each.
+    pub fn renderers(&self) -> &[crate::particles::Renderer] {
+        &self.system.renderers
     }
 
     /// Whether its sprite sheet's frames show one at a time, not blended into the next.

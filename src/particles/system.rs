@@ -27,7 +27,8 @@ pub struct System {
     pub crisp: bool,
     /// The flags of the instance overrides it leaves out.
     pub fixed: u32,
-    pub renderer: Renderer,
+    /// How each particle is drawn, once by each.
+    pub renderers: Vec<Renderer>,
     /// Systems let out once with it, each placed from its origin.
     pub children: Vec<Child>,
     pub controls: [Control; CONTROLS],
@@ -396,38 +397,13 @@ impl System {
         let renderers = list(root, "renderer")?;
         // Stock snow and light shafts leave the renderer out and draw sprites; spawners that
         // draw nothing give an empty list.
-        let renderer = match renderers {
-            [] if root.get("renderer").is_none_or(Value::is_null) => Renderer::Sprite,
-            [renderer] if text(renderer.get("name")) == Some("sprite") => {
-                known(renderer, &[], "sprite renderer")?;
-                Renderer::Sprite
-            }
-            [renderer] if text(renderer.get("name")) == Some("spritetrail") => {
-                known(
-                    renderer,
-                    &["length", "maxlength", "minlength"],
-                    "trail renderer",
-                )?;
-                let field = |key: &str, fill: f32| {
-                    number(renderer.get(key))
-                        .filter(|value| (0.0..=10000.0).contains(value))
-                        .unwrap_or(fill)
-                };
-                let min = field("minlength", 0.0);
-                Renderer::Trail {
-                    length: field("length", 0.05),
-                    min,
-                    max: field("maxlength", 10.0).max(min),
-                }
-            }
-            [renderer] if text(renderer.get("name")) == Some("ropetrail") => {
-                known(renderer, &["length"], "rope trail renderer")?;
-                Renderer::Rope {
-                    length: number(renderer.get("length"))
-                        .filter(|length| (0.0..=60.0).contains(length))
-                        .unwrap_or(1.0),
-                }
-            }
+        // Each particle is drawn once by each renderer, in order: a sprite with a trail behind.
+        let renderers = match renderers {
+            [] if root.get("renderer").is_none_or(Value::is_null) => vec![Renderer::Sprite],
+            [_] | [_, _] => renderers
+                .iter()
+                .map(drawn_by)
+                .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(refuse("particle renderers other than one sprite or trail")),
         };
         let emitters = list(root, "emitter")?
@@ -462,7 +438,7 @@ impl System {
             crisp: flags & CRISP != 0,
             fixed: flags & FIXED,
             sheet,
-            renderer,
+            renderers,
             children,
             controls,
         })
@@ -748,6 +724,43 @@ fn refuse(what: &str) -> Error {
     Error::Format(format!("unsupported {what}"))
 }
 
+/// One of a system's renderers.
+fn drawn_by(renderer: &Value) -> Result<Renderer, Error> {
+    match text(renderer.get("name")) {
+        Some("sprite") => {
+            known(renderer, &[], "sprite renderer")?;
+            Ok(Renderer::Sprite)
+        }
+        Some("spritetrail") => {
+            known(
+                renderer,
+                &["length", "maxlength", "minlength"],
+                "trail renderer",
+            )?;
+            let field = |key: &str, fill: f32| {
+                number(renderer.get(key))
+                    .filter(|value| (0.0..=10000.0).contains(value))
+                    .unwrap_or(fill)
+            };
+            let min = field("minlength", 0.0);
+            Ok(Renderer::Trail {
+                length: field("length", 0.05),
+                min,
+                max: field("maxlength", 10.0).max(min),
+            })
+        }
+        Some("ropetrail") => {
+            known(renderer, &["length"], "rope trail renderer")?;
+            Ok(Renderer::Rope {
+                length: number(renderer.get("length"))
+                    .filter(|length| (0.0..=60.0).contains(length))
+                    .unwrap_or(1.0),
+            })
+        }
+        _ => Err(refuse("particle renderers other than one sprite or trail")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -787,8 +800,8 @@ mod tests {
         assert_eq!(
             roped(r#"[{"name": "ropetrail", "length": 0.2}]"#)
                 .unwrap()
-                .renderer,
-            Renderer::Rope { length: 0.2 }
+                .renderers,
+            [Renderer::Rope { length: 0.2 }]
         );
         assert!(roped(r#"[{"name": "ropetrail", "length": 0.5, "fadealpha": true}]"#).is_err());
         // Without a renderer, it's drawn as sprites.
@@ -798,7 +811,24 @@ mod tests {
             "",
         );
         assert!(!unnamed.contains("renderer"));
-        assert_eq!(System::parse(&unnamed).unwrap().renderer, Renderer::Sprite);
+        assert_eq!(
+            System::parse(&unnamed).unwrap().renderers,
+            [Renderer::Sprite]
+        );
+        // A sprite may have a trail drawn behind it too.
+        assert_eq!(
+            roped(r#"[{"name": "sprite"}, {"name": "spritetrail", "maxlength": 4}]"#)
+                .unwrap()
+                .renderers,
+            [
+                Renderer::Sprite,
+                Renderer::Trail {
+                    length: 0.05,
+                    min: 0.0,
+                    max: 4.0
+                }
+            ]
+        );
         let both = flagged(5).unwrap();
         assert!(both.world && both.perspective && !both.crisp);
         // 2 shows sprite sheet frames whole; 8 to 128 leave colour, count, lifetime, size and

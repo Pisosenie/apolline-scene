@@ -2,6 +2,7 @@
 
 mod conditional;
 mod expression;
+mod literal;
 mod parameters;
 mod samplers;
 
@@ -347,7 +348,7 @@ fn stage(
             }
         }
     }
-    conditional::select(output, combos)
+    literal::turned(&conditional::select(output, combos)?)
 }
 
 /// A stage's whole source: the dialect, its combos, its body and the host's own main.

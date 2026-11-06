@@ -106,7 +106,7 @@ impl Swarm {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
             gl.buffer_data_size(
                 glow::ARRAY_BUFFER,
-                (Self::bytes(capacity)) as i32,
+                Self::bytes(capacity * system.renderers.len()) as i32,
                 glow::STREAM_DRAW,
             );
             let stride = (FLOATS * 4) as i32;
@@ -148,7 +148,7 @@ impl Swarm {
         }
     }
 
-    /// Bytes its buffer holds for `capacity` particles.
+    /// Bytes its buffer holds for `capacity` instances, one a particle per renderer.
     pub fn bytes(capacity: usize) -> usize {
         capacity.max(1) * FLOATS * 4
     }
@@ -217,11 +217,14 @@ impl Swarm {
         let perspective = simulation.perspective();
         let sheet = simulation.sheet();
         let crisp = simulation.crisp();
-        let renderer = simulation.renderer();
+        let renderers = simulation.renderers();
         let particles = simulation.particles();
-        let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
+        let mut bytes = Vec::with_capacity(particles.len() * renderers.len() * FLOATS * 4);
         let (middle, distance) = camera;
-        for particle in particles {
+        for (&renderer, particle) in renderers
+            .iter()
+            .flat_map(|renderer| particles.iter().map(move |particle| (renderer, particle)))
+        {
             let [vx, vy, _] = particle.velocity();
             // A rope lies behind its particle, as far back as it has come in its length.
             let back = match renderer {
@@ -284,7 +287,7 @@ impl Swarm {
             gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, &bytes);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
         }
-        particles.len() as i32
+        (particles.len() * renderers.len()) as i32
     }
 
     /// # Safety
