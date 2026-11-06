@@ -230,13 +230,22 @@ fn finite(value: Option<&Value>) -> Option<f64> {
 pub(crate) fn bind(root: &mut Value, values: &Values) {
     match root {
         Value::Object(fields) => {
-            if let Some(value) = fields
-                .get("user")
-                .and_then(Value::as_str)
-                .and_then(|key| values.get(key))
+            let user = fields.get("user");
+            let bound = match user.and_then(condition) {
+                // A flag that's whether the property is what the condition says.
+                Some((key, wanted)) => values
+                    .get(key)
+                    .filter(|_| fields.get("value").is_some_and(Value::is_boolean))
+                    .map(|value| Value::Bool(spelled(value) == wanted)),
+                None => user
+                    .and_then(Value::as_str)
+                    .and_then(|key| values.get(key))
+                    .cloned(),
+            };
+            if let Some(value) = bound
                 && fields.contains_key("value")
             {
-                fields.insert("value".into(), value.clone());
+                fields.insert("value".into(), value);
             }
             for value in fields.values_mut() {
                 bind(value, values);
@@ -248,6 +257,23 @@ pub(crate) fn bind(root: &mut Value, values: &Values) {
             }
         }
         _ => {}
+    }
+}
+
+/// A binding's property and the value it has to have: `{"name": …, "condition": …}`.
+pub(crate) fn condition(user: &Value) -> Option<(&str, String)> {
+    let name = user.get("name")?.as_str()?;
+    Some((name, spelled(user.get("condition")?)))
+}
+
+/// A combo's value as text, however it was written: `"2"` and `2` alike.
+fn spelled(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number
+            .as_i64()
+            .map_or_else(|| number.to_string(), |whole| whole.to_string()),
+        other => other.to_string(),
     }
 }
 
@@ -265,6 +291,25 @@ mod tests {
             "customfile":{"type":"file","value":""}
         }}})
     }
+    #[test]
+    fn a_condition_makes_a_flag_of_whether_a_combo_is_what_it_says() {
+        let values = Values::from([("style".into(), json!("2")), ("count".into(), json!(3))]);
+        let mut scene = json!({"objects": [
+            {"visible": {"user": {"name": "style", "condition": "2"}, "value": false}},
+            {"visible": {"user": {"name": "style", "condition": "1"}, "value": true}},
+            {"visible": {"user": {"name": "count", "condition": "3"}, "value": false}},
+            {"visible": {"user": {"name": "gone", "condition": "1"}, "value": true}}
+        ]});
+        bind(&mut scene, &values);
+        let shown: Vec<&Value> = (0..4)
+            .map(|at| &scene["objects"][at]["visible"]["value"])
+            .collect();
+        assert_eq!(
+            shown,
+            [&json!(true), &json!(false), &json!(true), &json!(true)]
+        );
+    }
+
     #[test]
     fn defaults_and_valid_edits_bind_without_executing_metadata() {
         let schema = Schema::parse(&project()).unwrap();

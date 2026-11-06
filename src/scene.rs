@@ -692,9 +692,12 @@ mod tests {
         assert_eq!(scene.missing(), [Missing::Camera3d]);
         let tied = Scene::parse(
             r#"{"general": {"orthogonalprojection": {"width": 10, "height": 10}},
-                "objects": [{"image": "a.json", "visible": {"user": {"name": "style", "condition": "2"}, "value": true}}]}"#,
+                "objects": [{"image": "a.json", "visible": {"user": {"name": "style", "condition": "2"}, "value": true},
+                             "alpha": {"user": {"name": "style", "condition": "2"}, "value": 0.5}}]}"#,
         )
         .unwrap();
+        // A flag that's whether a property is what the condition says is drawn; a condition
+        // on anything else isn't.
         assert_eq!(tied.missing(), [Missing::Conditional]);
         assert!(Scene::parse("not json").is_err());
     }

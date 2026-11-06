@@ -552,12 +552,16 @@ fn tilts(value: &Value) -> bool {
     })
 }
 
-/// `{"user": {"name": …, "condition": …}}` anywhere: a value that follows a property only
-/// under a condition.
+/// `{"user": {"name": …, "condition": …}}` anywhere that isn't a flag set by whether a
+/// property is what the condition says, which is what's drawn.
 fn conditional(value: &Value) -> bool {
     match value {
         Value::Object(fields) => {
-            fields.get("user").is_some_and(Value::is_object) || fields.values().any(conditional)
+            fields.get("user").is_some_and(|user| {
+                user.is_object()
+                    && (crate::properties::condition(user).is_none()
+                        || !fields.get("value").is_some_and(Value::is_boolean))
+            }) || fields.values().any(conditional)
         }
         Value::Array(items) => items.iter().any(conditional),
         _ => false,
