@@ -129,7 +129,19 @@ to 256 KiB, combined input and expanded source up to 1 MiB each. Includes are ex
 GLSL conditional evaluation, so a missing include in an inactive branch also refuses this
 subset. Host macros cannot be redefined. A `max` or `min` whose first argument is a number,
 which HLSL takes and GLSL doesn't (stock `nitro` writes `max(0, albedo.rgb)`), has its
-arguments turned around in the selected source; the result is the same. A vertex stage that
+arguments turned around in the selected source; the result is the same.
+
+Workshop shaders are written against HLSL's leniencies, which GLSL refuses. After branches are
+selected, a pass works out the type of each expression where that's plain (declared
+variables, uniforms, function signatures, combos, macros standing for a number, builtins and
+the stock `common.h` helpers) and spells out what HLSL would do implicitly: a vector set from
+a number becomes `vecN(…)`, a number set from a vector takes its `.x`, a wider vector its
+leading parts, whole numbers beside fractions become fractions (and `int`/`uint` are converted
+to each other as needed), `true`/`false` in arithmetic become numbers, `%` on fractions
+becomes `mod`, and a local `const` set from something not known in advance loses its `const`.
+`float2`…`float4x4` and `int2`…`int4` are defined as GLSL's types. It only adds conversions
+where GLSL would refuse the shader, and when it meets anything it can't follow it leaves the
+whole stage as written; every scene that already drew still compiles the same. A vertex stage that
 writes a wider vector than its fragment reads under one name (`vec4 v_TexCoord` read as a
 `vec2`) keeps its own under another and hands on the part read once its main is done.
 Plain image materials read `Bright` as brightness and `Power` as the power their colour is

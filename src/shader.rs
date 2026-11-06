@@ -1,6 +1,7 @@
 //! Preparation of the supported fragment-shader subset. No source is executed here.
 
 mod conditional;
+mod dialect;
 mod expression;
 mod literal;
 mod parameters;
@@ -383,7 +384,8 @@ fn stage(
             }
         }
     }
-    literal::turned(&conditional::select(output, combos)?)
+    let turned = literal::turned(&conditional::select(output, combos)?)?;
+    Ok(dialect::converted(&turned, combos))
 }
 
 /// A stage's whole source: the dialect, its combos, its body and the host's own main.
@@ -690,6 +692,15 @@ const COMMON: &str = "\
 #define CAST3(x) vec3(x)
 #define CAST4(x) vec4(x)
 #define CAST3X3(x) mat3(x)
+#define float2 vec2
+#define float3 vec3
+#define float4 vec4
+#define float2x2 mat2
+#define float3x3 mat3
+#define float4x4 mat4
+#define int2 ivec2
+#define int3 ivec3
+#define int4 ivec4
 #define main apolline_effect_main
 ";
 
