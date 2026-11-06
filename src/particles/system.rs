@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use super::control::{self, CONTROLS, Control};
 use crate::Error;
 use crate::value::{number, text, vector};
 
@@ -25,6 +26,7 @@ pub struct System {
     pub renderer: Renderer,
     /// Systems let out once with it, each placed from its origin.
     pub children: Vec<Child>,
+    pub controls: [Control; CONTROLS],
 }
 
 /// A child system let out once at its parent's origin, moved, scaled and turned from it.
@@ -204,6 +206,15 @@ pub enum Operator {
         mask: [f32; 3],
         blend: [f32; 4],
     },
+    /// Particles within `threshold` of a control point, moved by `origin`, sped towards it
+    /// by `scale` each second, or away when that's below zero.
+    Attract {
+        control: usize,
+        origin: [f32; 3],
+        scale: f32,
+        threshold: f32,
+        blend: [f32; 4],
+    },
 }
 
 /// What an oscillation swings.
@@ -244,6 +255,8 @@ const EMITTER: &[&str] = &[
     "speedmin",
 ];
 const RANGE: &[&str] = &["exponent", "max", "min"];
+/// The most particles a system has at once.
+pub const MOST: usize = 50_000;
 const CHANGE: &[&str] = &["endtime", "endvalue", "starttime", "startvalue"];
 const TURBULENT: &[&str] = &[
     "forward",
@@ -254,6 +267,17 @@ const TURBULENT: &[&str] = &[
     "speedmax",
     "speedmin",
     "timescale",
+];
+const ATTRACT: &[&str] = &[
+    "blendinend",
+    "blendinstart",
+    "blendoutend",
+    "blendoutstart",
+    "controlpoint",
+    "flags",
+    "origin",
+    "scale",
+    "threshold",
 ];
 const TURBULENCE: &[&str] = &[
     "blendinend",
@@ -359,15 +383,16 @@ impl System {
         for initializer in list(root, "initializer")? {
             initialize(initializer, &mut spawn)?;
         }
+        let controls = control::controls(root);
         let operators = list(root, "operator")?
             .iter()
-            .map(operator)
+            .map(|value| operator(value, &controls))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(System {
             material,
             max: number(root.get("maxcount"))
                 .unwrap_or(100.0)
-                .clamp(0.0, 10_000.0) as usize,
+                .clamp(0.0, MOST as f32) as usize,
             warmup: number(root.get("starttime"))
                 .unwrap_or(0.0)
                 .clamp(0.0, 30.0),
@@ -379,6 +404,7 @@ impl System {
             sheet,
             renderer,
             children,
+            controls,
         })
     }
 }
@@ -391,7 +417,8 @@ fn emitter(value: &Value) -> Result<Emitter, Error> {
     };
     known(value, EMITTER, "emitter")?;
     let rate = number(value.get("rate")).unwrap_or(5.0);
-    if !(0.0..=10_000.0).contains(&rate) {
+    // How many are let out stays within the system's count, however fast it asks.
+    if !(0.0..=100_000.0).contains(&rate) {
         return Err(refuse("an emitter rate out of range"));
     }
     if number(value.get("flags")).is_some_and(|flags| flags != 0.0) {
@@ -502,7 +529,7 @@ const OSCILLATE: &[&str] = &[
     "scalemin",
 ];
 
-fn operator(value: &Value) -> Result<Operator, Error> {
+fn operator(value: &Value, controls: &[Control; CONTROLS]) -> Result<Operator, Error> {
     let field = |key: &str, fill: f32| number(value.get(key)).unwrap_or(fill);
     let times = || [field("starttime", 0.0), field("endtime", 1.0)];
     let operator = match text(value.get("name")) {
@@ -568,6 +595,24 @@ fn operator(value: &Value) -> Result<Operator, Error> {
                 scale: range("scalemin", "scalemax", [0.0, 1.0]),
                 phase: range("phasemin", "phasemax", [0.0, std::f32::consts::TAU]),
                 mask: vector(value.get("mask"), [1.0, 1.0, 0.0]),
+                blend: [
+                    field("blendinstart", 0.0),
+                    field("blendinend", 0.0),
+                    field("blendoutstart", 1.0),
+                    field("blendoutend", 1.0),
+                ],
+            }
+        }
+        Some("controlpointattract") => {
+            known(value, ATTRACT, "operator")?;
+            if field("flags", 0.0) != 0.0 {
+                return Err(refuse("control point attraction flags"));
+            }
+            Operator::Attract {
+                control: control::named(value, controls, refuse)?,
+                origin: vector(value.get("origin"), [0.0; 3]),
+                scale: field("scale", 0.0),
+                threshold: field("threshold", 128.0).max(0.0),
                 blend: [
                     field("blendinstart", 0.0),
                     field("blendinend", 0.0),

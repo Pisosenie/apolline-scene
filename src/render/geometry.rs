@@ -48,6 +48,22 @@ pub fn place_fitted(
     ]
 }
 
+/// Where in the scene, `scene` big with y up, the pointer is when its whole is placed by
+/// `affine`; the pointer runs 0 to 1 across the screen from the top left.
+pub(super) fn pointed(affine: &Affine, scene: (f32, f32), pointer: [f32; 2]) -> [f32; 2] {
+    let [[a, b, x], [c, d, y]] = *affine;
+    let ndc = [pointer[0] * 2.0 - 1.0 - x, 1.0 - pointer[1] * 2.0 - y];
+    let det = a * d - b * c;
+    if det.abs() < 1e-12 {
+        return [scene.0 / 2.0, scene.1 / 2.0];
+    }
+    let unit = [
+        (d * ndc[0] - b * ndc[1]) / det,
+        (a * ndc[1] - c * ndc[0]) / det,
+    ];
+    [(unit[0] + 0.5) * scene.0, (unit[1] + 0.5) * scene.1]
+}
+
 /// Where a shaking camera has moved `time` seconds in, in shares of the scene's size: a smooth
 /// wander a two-hundredth of the scene across per unit of amplitude, quicker with speed and
 /// jitterier with roughness.
@@ -73,6 +89,17 @@ pub(super) fn toward(eye: [f32; 2], pointer: [f32; 2], seconds: f32, delay: f32)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pointer_is_found_in_the_scene_however_it_is_fitted_and_zoomed() {
+        let scene = (1920.0, 1080.0);
+        let whole = place_fitted(scene, (1280, 720), [960.0, 540.0], scene, 0.0, Fit::Cover);
+        assert_eq!(pointed(&whole, scene, [0.5, 0.5]), [960.0, 540.0]);
+        // Top left on screen is the scene's top left, which is up its y.
+        assert_eq!(pointed(&whole, scene, [0.0, 0.0]), [0.0, 1080.0]);
+        let zoomed = whole.map(|row| row.map(|value| value * 2.0));
+        assert_eq!(pointed(&zoomed, scene, [0.0, 0.0]), [480.0, 810.0]);
+    }
 
     #[test]
     fn a_shaking_camera_wanders_no_further_than_its_amplitude() {

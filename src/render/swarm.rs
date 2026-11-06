@@ -149,8 +149,14 @@ impl Swarm {
         system.max.max(1) * FLOATS * 4
     }
 
+    /// Whether its particles follow the pointer.
+    pub fn points(&self) -> bool {
+        self.simulation.borrow().points()
+    }
+
     /// Brings the particles to `time` and fills the buffer with them where the system is
-    /// placed, scaled and turned, returning how many there are.
+    /// placed, scaled and turned, returning how many there are. `pointer` is where the
+    /// pointer is in the scene.
     ///
     /// # Safety
     /// The GL context must be current on this thread.
@@ -165,15 +171,30 @@ impl Swarm {
         scale: [f32; 3],
         angle: f32,
         camera: ([f32; 2], f32),
+        pointer: [f32; 2],
     ) -> i32 {
         let mut simulation = self.simulation.borrow_mut();
+        let (sin, cos) = angle.sin_cos();
+        if simulation.points() {
+            let [x, y] = [pointer[0] - origin[0], pointer[1] - origin[1]];
+            let across = |value: f32, scale: f32| {
+                if scale.abs() > 1e-6 {
+                    value / scale
+                } else {
+                    0.0
+                }
+            };
+            simulation.point([
+                across(cos * x + sin * y, scale[0]),
+                across(-sin * x + cos * y, scale[1]),
+            ]);
+        }
         simulation.seek(time);
         let perspective = simulation.perspective();
         let sheet = simulation.sheet();
         let renderer = simulation.renderer();
         let particles = simulation.particles();
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
-        let (sin, cos) = angle.sin_cos();
         let (middle, distance) = camera;
         for particle in particles {
             let x = particle.position[0] * scale[0];

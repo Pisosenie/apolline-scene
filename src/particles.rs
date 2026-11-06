@@ -2,11 +2,14 @@
 //! and a simulation that comes out the same for the same system and time, so a frame can be
 //! redrawn or a paused scene resumed without a jump.
 
+mod control;
 mod noise;
 mod simulation;
 mod system;
 
+pub use control::Control;
 pub use simulation::{Particle, Simulation};
 pub use system::{
-    Between, Child, Emitter, Operator, Renderer, Shape, Sheet, Spawn, Swing, System, Turbulent,
+    Between, Child, Emitter, MOST, Operator, Renderer, Shape, Sheet, Spawn, Swing, System,
+    Turbulent,
 };

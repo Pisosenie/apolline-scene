@@ -444,7 +444,13 @@ impl Renderer {
             .as_ref()
             .map_or((false, false), |stage| stage.needs());
         Needs {
-            pointer: self.parallax.is_some() || frames().any(material::Frame::points),
+            pointer: self.parallax.is_some()
+                || frames().any(material::Frame::points)
+                || self
+                    .layers
+                    .iter()
+                    .filter_map(|layer| layer.swarm.as_ref())
+                    .any(swarm::Swarm::points),
             daytime: daytime || frames().any(|frame| frame.daytime.is_some()),
             audio: audio || frames().any(material::Frame::listens),
         }
@@ -608,8 +614,16 @@ impl Renderer {
                         let scale = [layer.size.0, layer.size.1, layer.size.0];
                         let middle = [self.size.0 / 2.0, self.size.1 / 2.0];
                         let camera = (middle, self.camera);
-                        let count =
-                            swarm.update(gl, time, layer.origin, scale, layer.angle, camera);
+                        let pointer = geometry::pointed(&affine, self.size, self.inputs.pointer);
+                        let count = swarm.update(
+                            gl,
+                            time,
+                            layer.origin,
+                            scale,
+                            layer.angle,
+                            camera,
+                            pointer,
+                        );
                         gl.bind_vertex_array(Some(swarm.vao));
                         gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);
                         // The next layer may share the program but not these instances.

@@ -132,7 +132,13 @@ turns; the `turbulence` operator pushes each particle every second by noise over
 and the time, at a speed of its own, along the axes its mask lets through. Their defaults
 aren't written anywhere public, so those that no file sets are guesses (speeds 100–250 and
 500–1000, operator scale 0.01, mask "1 1 0" since 3D examples spell out "1 1 1"); audio
-response is refused.
+response is refused. Control points are read too: each sits at its offset from the system's origin
+or, with flag 1 (`locktopointer`), on the pointer, which the renderer maps back from the
+screen through the scene's placement into the system's own units. `controlpointattract`
+speeds particles within its threshold towards one, or away for a negative scale, so
+cursor-avoiding dust and smoke work; a system that does makes the scene need the pointer.
+Control points with other flags (children's, 4 and 16) refuse the operators that use them.
+Systems may hold 50 000 particles and ask for any rate up to 100 000 a second.
 
 **F. SceneScript**, done for objects: each `{script, scriptproperties, value}` on an image,
 particle system or group's `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or

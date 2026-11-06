@@ -71,6 +71,8 @@ pub struct Simulation {
     steps: u64,
     /// Steps taken since it started, warming up included, which turbulence moves with.
     taken: u64,
+    /// Where the pointer is in the system's own units, for control points locked to it.
+    pointer: Option<[f32; 2]>,
 }
 
 impl Simulation {
@@ -85,6 +87,7 @@ impl Simulation {
             elapsed: 0.0,
             steps: 0,
             taken: 0,
+            pointer: None,
         };
         simulation.restart();
         simulation
@@ -142,6 +145,19 @@ impl Simulation {
         }
     }
 
+    /// Whether a control point an operator uses follows the pointer.
+    pub fn points(&self) -> bool {
+        self.system.operators.iter().any(|operator| match operator {
+            Operator::Attract { control, .. } => self.system.controls[*control].pointer,
+            _ => false,
+        })
+    }
+
+    /// The pointer moved to `at` in the system's own units.
+    pub fn point(&mut self, at: [f32; 2]) {
+        self.pointer = Some(at);
+    }
+
     /// How its particles are drawn.
     pub fn renderer(&self) -> crate::particles::Renderer {
         self.system.renderer
@@ -178,9 +194,20 @@ impl Simulation {
                 }
             }
         }
+        let controls = system
+            .controls
+            .map(|control| match (control.pointer, self.pointer) {
+                (true, Some([x, y])) => [
+                    x + control.offset[0],
+                    y + control.offset[1],
+                    control.offset[2],
+                ],
+                _ => control.offset,
+            });
         let world = World {
             seed: self.seed,
             now: self.taken as f64 / RATE,
+            controls,
         };
         for particle in &mut self.particles {
             live(particle, &system.operators, world);
@@ -318,6 +345,8 @@ impl Simulation {
 struct World {
     seed: u64,
     now: f64,
+    /// Where each control point is in the system's units.
+    controls: [[f32; 3]; super::control::CONTROLS],
 }
 
 /// One step of a particle's life under the system's operators.
@@ -386,6 +415,24 @@ fn live(particle: &mut Particle, operators: &[Operator], world: World) {
                 let strength = pick(1, speed) * fade(t, blend) * STEP;
                 for ((velocity, push), mask) in particle.velocity.iter_mut().zip(push).zip(mask) {
                     *velocity += push * mask * strength;
+                }
+            }
+            Operator::Attract {
+                control,
+                origin,
+                scale,
+                threshold,
+                blend,
+            } => {
+                let toward: [f32; 3] = [0, 1, 2].map(|axis| {
+                    world.controls[control][axis] + origin[axis] - particle.position[axis]
+                });
+                let distance = toward.iter().map(|v| v * v).sum::<f32>().sqrt();
+                if distance > 1e-3 && distance < threshold {
+                    let pull = scale * fade(t, blend) * STEP / distance;
+                    for (velocity, toward) in particle.velocity.iter_mut().zip(toward) {
+                        *velocity += toward * pull;
+                    }
                 }
             }
             Operator::Movement { gravity, drag } => {
@@ -533,6 +580,40 @@ mod tests {
                     <= 0.1 * std::f32::consts::PI + 1e-4)
         );
         assert!(angles.iter().any(|angle| (angle - angles[0]).abs() > 1e-3));
+    }
+
+    #[test]
+    fn a_control_point_on_the_pointer_pushes_particles_away_near_it() {
+        let system = system(
+            r#"{"material": "m.json", "maxcount": 400,
+                "controlpoint": [{"id": 1, "flags": 1, "offset": "0 0 0"}],
+                "emitter": [{"name": "sphererandom", "rate": 400, "distancemax": 100}],
+                "initializer": [{"name": "lifetimerandom", "min": 5, "max": 5}],
+                "operator": [{"name": "movement"},
+                             {"name": "controlpointattract", "controlpoint": 1, "scale": -5000, "threshold": 60}],
+                "renderer": [{"name": "sprite"}]}"#,
+        );
+        let mut pushed = Simulation::new(Arc::clone(&system), 9);
+        assert!(pushed.points());
+        pushed.point([0.0, 0.0]);
+        pushed.advance(1.0);
+        let near = |simulation: &Simulation| {
+            let close = simulation
+                .particles()
+                .iter()
+                .filter(|particle| particle.position[0].hypot(particle.position[1]) < 30.0);
+            close.count()
+        };
+        let mut away = Simulation::new(system, 9);
+        away.point([5000.0, 0.0]);
+        away.advance(1.0);
+        assert!(near(&away) > 20, "{}", near(&away));
+        assert!(
+            near(&pushed) < near(&away) / 4,
+            "{} {}",
+            near(&pushed),
+            near(&away)
+        );
     }
 
     #[test]

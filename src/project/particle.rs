@@ -233,7 +233,10 @@ fn overridden(
                 .ok_or_else(|| Error::Format(format!("particle override {key} out of range")))
         };
         match key.as_str() {
-            "count" => system.max = ((system.max as f32) * factor()?).min(10_000.0) as usize,
+            "count" => {
+                let most = crate::particles::MOST as f32;
+                system.max = ((system.max as f32) * factor()?).min(most) as usize;
+            }
             "rate" => {
                 let factor = factor()?;
                 for emitter in &mut system.emitters {
