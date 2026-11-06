@@ -71,6 +71,8 @@ pub struct Layer {
     pub child: Option<crate::particles::Child>,
     /// For a system following another's particles, how many layers before it that one is.
     pub leader: Option<usize>,
+    /// The mesh a puppet's picture is drawn on, bent by its bones.
+    pub puppet: Option<Arc<crate::puppet::Puppet>>,
     /// How a text layer's words are drawn, for when its scripts change them.
     pub text: Option<Arc<crate::text::Lettering>>,
 }
@@ -170,6 +172,7 @@ struct Resolved {
     solid: bool,
     sprite: bool,
     compose: bool,
+    puppet: Option<Arc<crate::puppet::Puppet>>,
 }
 
 impl Project {
@@ -519,6 +522,7 @@ impl Project {
             particles: None,
             child: None,
             leader: None,
+            puppet: resolved.puppet.clone(),
             text: None,
         })
     }
@@ -541,6 +545,18 @@ impl Project {
         let material = text(model.get("material"))
             .ok_or_else(|| Error::Format(format!("{model_name} names no material")))?;
         let material = self.instanced(material, instance, textures)?;
+        // A puppet's picture is cut into a mesh its bones bend.
+        let puppet = match text(model.get("puppet")) {
+            Some(name) => {
+                let bytes = self
+                    .try_file(name, crate::files::RESOURCE_BYTES)?
+                    .ok_or_else(|| Error::Format(format!("{name} isn't in the project")))?;
+                let puppet = crate::puppet::Puppet::parse(&bytes)
+                    .map_err(|error| Error::Format(format!("{name}: {error}")))?;
+                Some(Arc::new(puppet))
+            }
+            None => None,
+        };
         let names = material.names;
         let fragment = material.fragment;
         let shade = material.shade;
@@ -575,6 +591,7 @@ impl Project {
             solid: material.solid,
             sprite: material.sprite,
             compose: material.compose,
+            puppet,
         })
     }
 }

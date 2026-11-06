@@ -80,6 +80,22 @@ rest, by scenes:
   (darken 1 through tint 30, then add-by-opacity 31 and A + AB 32). Most modes mix by the
   layer's alpha; min 5 and max 10 don't. Tint (30) checked against a preview's brightness to
   within 0.005. Text layers that blend are still refused.
+- Puppet warp (`animationlayers`, a model's `puppet`), 12: the `.mdl` file's layout was worked
+  out from the scenes' own files. Its mesh (`MDLV` 13, 16, 19, 21, 23) is corners in the
+  picture's pixels from its middle, y up, each with up to four bones and weights and where in
+  the picture it shows; then 16-bit triangles. Which attributes a corner has is in the mesh's
+  flags (position 1, normal 2, tangent 4, picture 8, bones 0x01800000). The skeleton (`MDLS`)
+  is each bone's name, parent and 4×4 rest matrix from its parent, then an editor's note, and
+  then, from version 2, what the editor draws bones with, skipped by the section's end. An
+  animation (`MDLA`) has an id, a name, `loop`, `mirror` or `single`, frames a second, a
+  length, and per bone a frame more than its length, each a position, Euler angles in
+  radians (only z read) and a scale. What follows each animation differs between versions,
+  so only a file's first is read; a layer that plays another plays nothing. Corners are bent
+  on the CPU each frame: each bone's pose is its layers' frames over its rest pose (mixed by
+  `blend`, or added from rest when `additive`, at `rate`), placed through its parents, and
+  each corner follows its bones by weight. The mesh is drawn in place of the layer's quad,
+  showing the layer's picture after its effects, which work on the flat picture. Version 23
+  skeletons and models without animations are refused.
 - Camera zoom (`general.zoom`), 3: drawn as the whole scene scaled about its middle, nearer
   above 1. One scene's preview matches it unzoomed, so which way it goes is a guess from a
   scene that animates it from 3 down to 1 as an opening; animated zooms aren't

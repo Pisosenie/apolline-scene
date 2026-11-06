@@ -114,6 +114,7 @@ const IMAGE: &[&str] = &[
     "alignment",
     "alpha",
     "angles",
+    "animationlayers",
     "config",
     "brightness",
     "castshadow",

@@ -40,6 +40,7 @@ fn placed(
         sprite: None,
         compose: layer.compose,
         mode: layer.image.mode,
+        rig: None,
     };
     drawn.pose(&layer.image.pose());
     drawn
@@ -56,8 +57,8 @@ pub(super) struct Builder<'a> {
     variants: HashMap<(Option<&'a str>, &'a str), usize>,
     /// Our particle program, once a layer needs it.
     particles: Option<usize>,
-    /// Our blending layers' programs, by mode.
-    blends: HashMap<u8, usize>,
+    /// Our programs for layers that blend or are puppets, by mode and whether they're meshes.
+    ours: HashMap<(u8, bool), usize>,
     /// The objects whose finished pictures other layers' effects read.
     pub composited: std::collections::BTreeSet<usize>,
     source_bytes: usize,
@@ -72,7 +73,7 @@ impl<'a> Builder<'a> {
             sheets: HashMap::new(),
             variants: HashMap::new(),
             particles: None,
-            blends: HashMap::new(),
+            ours: HashMap::new(),
             composited: std::collections::BTreeSet::new(),
             source_bytes: 0,
             allocated: 0,
@@ -180,9 +181,20 @@ impl<'a> Builder<'a> {
             );
             unsafe { self.chain(renderer, scene, layer, own, size)? }
         };
-        if blends {
-            step.program = unsafe { self.blend(renderer, layer.image.mode)? };
+        let puppet = layer.puppet.as_ref().filter(|_| layer.particles.is_none());
+        if blends || puppet.is_some() {
+            let mode = if blends { layer.image.mode } else { 0 };
+            step.program = unsafe { self.ours(renderer, mode, puppet.is_some())? };
         }
+        let rig = match puppet {
+            Some(puppet) => {
+                reserve(&mut self.allocated, super::rig::Rig::bytes(puppet))?;
+                let natural = [picture.0 as f32, picture.1 as f32];
+                let animations = &layer.image.animations;
+                Some(unsafe { super::rig::Rig::new(self.gl, puppet, animations, natural)? })
+            }
+            None => None,
+        };
         if let Some(system) = &layer.particles {
             // A script that changes the count may ask for any number up to the most.
             let counted = scene.scripts.iter().any(|script| {
@@ -213,6 +225,7 @@ impl<'a> Builder<'a> {
         let mut drawn = Drawn {
             words,
             sprite,
+            rig,
             ..placed(step, chain, None, layer, base)
         };
         drawn.play(0.0);
@@ -469,19 +482,33 @@ impl<'a> Builder<'a> {
         Ok(uploaded)
     }
 
-    /// Our program for layers blending in `mode`, made once however many do.
+    /// Our program for layers blending in `mode`, drawn as a quad or a puppet's mesh, made
+    /// once however many there are.
     ///
     /// # Safety
     /// The GL context must be current on this thread.
-    unsafe fn blend(&mut self, renderer: &mut Renderer, mode: u8) -> Result<usize, Error> {
-        if let Some(&index) = self.blends.get(&mode) {
+    unsafe fn ours(
+        &mut self,
+        renderer: &mut Renderer,
+        mode: u8,
+        mesh: bool,
+    ) -> Result<usize, Error> {
+        if let Some(&index) = self.ours.get(&(mode, mesh)) {
             return Ok(index);
         }
-        let fragment = super::blend::fragment(mode);
-        let program = unsafe { super::program(self.gl, super::VERTEX, &fragment)? };
+        let fragment = match mode {
+            0 => super::FRAGMENT.to_owned(),
+            mode => super::blend::fragment(mode),
+        };
+        let vertex = if mesh {
+            super::rig::VERTEX
+        } else {
+            super::VERTEX
+        };
+        let program = unsafe { super::program(self.gl, vertex, &fragment)? };
         renderer.programs.push(program);
         let index = renderer.programs.len() - 1;
-        self.blends.insert(mode, index);
+        self.ours.insert((mode, mesh), index);
         Ok(index)
     }
 

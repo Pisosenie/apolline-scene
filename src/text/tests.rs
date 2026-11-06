@@ -21,6 +21,7 @@ fn words(text: &str) -> Text {
             effects: Vec::new(),
             instance: None,
             mode: 0,
+            animations: Vec::new(),
         },
         text: text.into(),
         font: "fonts/Cantarell-Regular.ttf".into(),

@@ -61,6 +61,7 @@ impl Project {
             particles: None,
             child: None,
             leader: None,
+            puppet: None,
             text: Some(Arc::new(lettering)),
         })
     }

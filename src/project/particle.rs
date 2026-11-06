@@ -190,6 +190,7 @@ impl Project {
                 effects: Vec::new(),
                 instance: None,
                 mode: 0,
+                animations: Vec::new(),
             },
             texture,
             secondary: Vec::new(),
@@ -203,6 +204,7 @@ impl Project {
             particles: Some(Arc::new(system)),
             child: None,
             leader: None,
+            puppet: None,
             text: None,
         })
     }

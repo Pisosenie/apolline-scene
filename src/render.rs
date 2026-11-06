@@ -10,6 +10,7 @@ mod compile;
 mod compose;
 mod geometry;
 mod material;
+mod rig;
 mod scripted;
 mod sprite;
 mod state;
@@ -116,6 +117,8 @@ struct Drawn {
     compose: bool,
     /// How it mixes with what's drawn under it, a copy of which it reads; 0 for not at all.
     mode: u8,
+    /// A puppet's mesh, drawn in place of the layer's quad.
+    rig: Option<rig::Rig>,
 }
 
 /// How a layer is placed from where its object is.
@@ -395,10 +398,11 @@ impl Renderer {
     pub fn animated(&self) -> bool {
         self.stage.is_some()
             || self.shake.is_some()
-            || self
-                .layers
-                .iter()
-                .any(|layer| layer.swarm.is_some() || layer.sprite.is_some())
+            || self.layers.iter().any(|layer| {
+                layer.swarm.is_some()
+                    || layer.sprite.is_some()
+                    || layer.rig.as_ref().is_some_and(rig::Rig::moves)
+            })
             || self
                 .programs
                 .iter()
@@ -662,7 +666,13 @@ impl Renderer {
                         // The next layer may share the program but not these instances.
                         current_program = None;
                     }
-                    None => gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4),
+                    None => match &layer.rig {
+                        Some(rig) => {
+                            rig.draw(gl, time);
+                            current_program = None;
+                        }
+                        None => gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4),
+                    },
                 }
             }
             gl.disable(glow::SCISSOR_TEST);
@@ -718,6 +728,9 @@ impl Renderer {
             }
             for chain in self.layers.iter().filter_map(|layer| layer.chain.as_ref()) {
                 chain.delete(gl);
+            }
+            for rig in self.layers.iter().filter_map(|layer| layer.rig.as_ref()) {
+                rig.delete(gl);
             }
             for swarm in self.layers.iter().filter_map(|layer| layer.swarm.as_ref()) {
                 swarm.delete(gl);

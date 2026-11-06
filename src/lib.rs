@@ -7,6 +7,7 @@ pub mod particles;
 pub mod pkg;
 pub mod project;
 pub mod properties;
+pub mod puppet;
 pub mod render;
 pub mod scene;
 pub mod script;

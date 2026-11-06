@@ -211,6 +211,8 @@ pub struct Image {
     pub instance: Option<serde_json::Map<String, Value>>,
     /// How it mixes with what's under it, 0 for laying over it as usual.
     pub mode: u8,
+    /// The animations playing on its puppet, in order, those shown only.
+    pub animations: Vec<crate::puppet::Posed>,
 }
 
 impl Image {
@@ -480,6 +482,7 @@ fn object(value: &Value) -> Object {
                 size: None,
                 anchor: [0.0; 2],
                 mode: 0,
+                animations: Vec::new(),
                 ..picture(value, "")
             },
             text: text(field("text")).unwrap_or_default().to_owned(),
@@ -548,6 +551,20 @@ fn picture(value: &Value, model: &str) -> Image {
         mode: number(field("colorBlendMode"))
             .filter(|mode| mode.fract() == 0.0 && (0.0..=32.0).contains(mode))
             .map_or(0, |mode| mode as u8),
+        animations: field("animationlayers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|layer| flag(layer.get("visible")).unwrap_or(true))
+            .filter_map(|layer| {
+                Some(crate::puppet::Posed {
+                    animation: number(layer.get("animation"))? as u32,
+                    rate: number(layer.get("rate")).unwrap_or(1.0),
+                    blend: number(layer.get("blend")).unwrap_or(1.0),
+                    additive: flag(layer.get("additive")).unwrap_or(false),
+                })
+            })
+            .collect(),
     }
 }
 
