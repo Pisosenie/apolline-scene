@@ -81,6 +81,7 @@ const PASS: &[&str] = &[
     "depthwrite",
     "shader",
     "textures",
+    "usertextures",
 ];
 
 impl Project {
@@ -289,6 +290,7 @@ impl Project {
             _ => return Err(Error::Format("an effect material needs one pass".into())),
         };
         known(pass, PASS)?;
+        self.user_textures(pass.get("usertextures"))?;
         if !matches!(
             pass.get("blending").and_then(|value| text(Some(value))),
             None | Some("normal" | "disabled")

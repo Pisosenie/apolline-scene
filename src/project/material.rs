@@ -134,6 +134,7 @@ impl Project {
                         | "cullmode"
                         | "depthtest"
                         | "depthwrite"
+                        | "usertextures"
                 )
             })
         }) {
@@ -153,6 +154,7 @@ impl Project {
                 _ => return Err(Error::Format("unsupported material blending mode".into())),
             },
         };
+        self.user_textures(pass.get("usertextures"))?;
         let combos = object(pass.get("combos"), 64, 64)?;
         let constants = object(pass.get("constantshadervalues"), 128, 128)?;
         let mut names = names(pass.get("textures"))?;
@@ -224,6 +226,36 @@ impl Project {
             sprite: false,
             compose: false,
         })
+    }
+
+    /// Textures the user or the system may give in place of a material's own: album art, which
+    /// a desktop without playing media doesn't have, and pictures the project's properties
+    /// let the user choose, of which none chosen leaves the material's.
+    pub(super) fn user_textures(&self, given: Option<&Value>) -> Result<(), Error> {
+        let Some(given) = given else {
+            return Ok(());
+        };
+        let slots = given
+            .as_array()
+            .filter(|slots| slots.len() <= 8)
+            .ok_or_else(|| Error::Format("user textures must be at most eight slots".into()))?;
+        for slot in slots {
+            let chosen = match slot {
+                Value::Null => continue,
+                Value::Object(system) if text(system.get("type")) == Some("system") => continue,
+                Value::String(property) => self
+                    .values
+                    .get(property)
+                    .is_some_and(|value| value.as_str().is_none_or(|path| !path.is_empty())),
+                _ => true,
+            };
+            if chosen {
+                return Err(Error::Format(
+                    "textures the user chose need another renderer".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A custom shader's program for one pass. An effect's pass has slots the chain `provides`
