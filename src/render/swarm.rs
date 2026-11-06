@@ -1,4 +1,5 @@
-//! Particle systems drawn as sprites, one instance each, from a buffer filled every frame.
+//! Particle systems drawn as sprites, one instance each, from a buffer filled every frame. A
+//! sprite sheet's particles each show their frame, blending into the next as they go.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -6,19 +7,26 @@ use std::sync::Arc;
 use glow::HasContext;
 
 use crate::Error;
-use crate::particles::{Simulation, System};
+use crate::particles::{Sheet, Simulation, System};
+use crate::tex::Frame;
 
-/// Floats per particle: centre x and y, size and turn, then colour and alpha.
-const FLOATS: usize = 8;
+/// Floats per particle: centre x and y, size and turn; colour and alpha; the corners of its
+/// frame and the next in the texture; their top and left sides; and how far it is on to the
+/// next.
+const FLOATS: usize = 17;
 
 pub(super) const VERTEX: &str = "
 uniform vec3 row0;
 uniform vec3 row1;
-uniform vec2 uv_max;
 uniform vec2 apolline_layer_size;
 layout(location = 0) in vec4 particle;
 layout(location = 1) in vec4 particle_color;
+layout(location = 2) in vec4 frames;
+layout(location = 3) in vec4 sides;
+layout(location = 4) in float onward;
 out vec2 uv;
+out vec2 next_uv;
+out float blend;
 out vec4 shade;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
@@ -28,7 +36,11 @@ void main() {
     vec2 at = particle.xy + vec2(c * offset.x - s * offset.y, s * offset.x + c * offset.y);
     vec3 local = vec3(at / apolline_layer_size - 0.5, 1.0);
     gl_Position = vec4(dot(row0, local), dot(row1, local), 0.0, 1.0);
-    uv = vec2(corner.x, 1.0 - corner.y) * uv_max;
+    vec2 across = vec2(corner.x, 1.0 - corner.y);
+    vec2 inside = across.x * sides.xy + across.y * sides.zw;
+    uv = frames.xy + inside;
+    next_uv = frames.zw + inside;
+    blend = onward;
     shade = particle_color;
 }";
 
@@ -37,10 +49,15 @@ uniform sampler2D picture;
 uniform vec4 tint;
 uniform int picture_channels;
 in vec2 uv;
+in vec2 next_uv;
+in float blend;
 in vec4 shade;
 out vec4 color;
 void main() {
     vec4 pixel = texture(picture, uv);
+    if (blend > 0.0) {
+        pixel = mix(pixel, texture(picture, next_uv), blend);
+    }
     if (picture_channels == 1) {
         pixel = vec4(pixel.rrr, 1.0);
     } else if (picture_channels == 2) {
@@ -53,12 +70,23 @@ pub(super) struct Swarm {
     simulation: RefCell<Simulation>,
     pub vao: glow::VertexArray,
     buffer: glow::Buffer,
+    /// A sprite sheet's frames' corners, and all their sides; without one, the whole picture.
+    corners: Vec<[f32; 2]>,
+    sides: [f32; 4],
 }
 
 impl Swarm {
     /// # Safety
     /// The GL context must be current on this thread.
-    pub unsafe fn new(gl: &glow::Context, system: &Arc<System>, seed: u64) -> Result<Self, Error> {
+    /// `frames` are its texture's, a sprite sheet's, and `uv_max` how much of the texture is
+    /// picture.
+    pub unsafe fn new(
+        gl: &glow::Context,
+        system: &Arc<System>,
+        frames: &[Frame],
+        uv_max: [f32; 2],
+        seed: u64,
+    ) -> Result<Self, Error> {
         let fail = |what: String| Error::Format(format!("a particle buffer: {what}"));
         unsafe {
             let buffer = gl.create_buffer().map_err(fail)?;
@@ -77,17 +105,33 @@ impl Swarm {
                 glow::STREAM_DRAW,
             );
             let stride = (FLOATS * 4) as i32;
-            for (location, offset) in [(0, 0), (1, 16)] {
+            for (location, size, offset) in
+                [(0, 4, 0), (1, 4, 16), (2, 4, 32), (3, 4, 48), (4, 1, 64)]
+            {
                 gl.enable_vertex_attrib_array(location);
-                gl.vertex_attrib_pointer_f32(location, 4, glow::FLOAT, false, stride, offset);
+                gl.vertex_attrib_pointer_f32(location, size, glow::FLOAT, false, stride, offset);
                 gl.vertex_attrib_divisor(location, 1);
             }
             gl.bind_vertex_array(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
+            let (corners, sides) = match frames.first() {
+                Some(first) => (
+                    frames.iter().map(|frame| frame.corner).collect(),
+                    [
+                        first.across[0],
+                        first.across[1],
+                        first.down[0],
+                        first.down[1],
+                    ],
+                ),
+                None => (vec![[0.0; 2]], [uv_max[0], 0.0, 0.0, uv_max[1]]),
+            };
             Ok(Swarm {
                 simulation: RefCell::new(Simulation::new(Arc::clone(system), seed)),
                 vao,
                 buffer,
+                corners,
+                sides,
             })
         }
     }
@@ -117,6 +161,7 @@ impl Swarm {
         let mut simulation = self.simulation.borrow_mut();
         simulation.seek(time);
         let perspective = simulation.perspective();
+        let sheet = simulation.sheet();
         let particles = simulation.particles();
         let mut bytes = Vec::with_capacity(particles.len() * FLOATS * 4);
         let (sin, cos) = angle.sin_cos();
@@ -131,6 +176,8 @@ impl Swarm {
                 0.0
             };
             let (at, near) = seen(at, depth, middle, distance);
+            let ([now, next], onward) = frames(self.corners.len(), particle.sheet(sheet), sheet);
+            let (now, next) = (self.corners[now], self.corners[next]);
             for value in [
                 at[0],
                 at[1],
@@ -140,6 +187,15 @@ impl Swarm {
                 particle.color[1],
                 particle.color[2],
                 particle.alpha,
+                now[0],
+                now[1],
+                next[0],
+                next[1],
+                self.sides[0],
+                self.sides[1],
+                self.sides[2],
+                self.sides[3],
+                onward,
             ] {
                 bytes.extend_from_slice(&value.to_ne_bytes());
             }
@@ -159,6 +215,21 @@ impl Swarm {
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.buffer);
         }
+    }
+}
+
+/// Which of `count` frames a particle `through` its sheet shows and the one after, and how far
+/// it is on to that one: only a sequence blends, and its last frame stays.
+fn frames(count: usize, through: f32, sheet: Sheet) -> ([usize; 2], f32) {
+    let last = count.saturating_sub(1);
+    let at = through.clamp(0.0, 1.0) * count as f32;
+    let now = (at.floor() as usize).min(last);
+    match sheet {
+        Sheet::Random => ([now; 2], 0.0),
+        Sheet::Sequence(_) => (
+            [now, (now + 1).min(last)],
+            if now < last { at.fract() } else { 0.0 },
+        ),
     }
 }
 
@@ -183,7 +254,19 @@ fn seen(at: [f32; 2], depth: f32, middle: [f32; 2], distance: f32) -> ([f32; 2],
 
 #[cfg(test)]
 mod tests {
-    use super::seen;
+    use super::{frames, seen};
+    use crate::particles::Sheet;
+
+    #[test]
+    fn a_sequence_blends_frame_into_frame_and_a_random_pick_holds_one() {
+        let sequence = Sheet::Sequence(1.0);
+        assert_eq!(frames(4, 0.0, sequence), ([0, 1], 0.0));
+        assert_eq!(frames(4, 0.375, sequence), ([1, 2], 0.5));
+        assert_eq!(frames(4, 0.99, sequence).0, [3, 3]);
+        assert_eq!(frames(4, 0.99, sequence).1, 0.0);
+        assert_eq!(frames(4, 0.6, Sheet::Random), ([2, 2], 0.0));
+        assert_eq!(frames(1, 0.5, sequence), ([0, 0], 0.0));
+    }
 
     #[test]
     fn nearer_particles_look_bigger_and_further_out() {

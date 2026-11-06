@@ -121,8 +121,9 @@ enum Base {
     },
     /// Covering the scene, whatever its object says.
     Whole { scene: (f32, f32), shade: [f32; 2] },
-    /// A particle system: the object's origin and scale place and size it.
-    Particles,
+    /// A particle system: the object's origin and scale place and size it, and its material
+    /// brightens it.
+    Particles { shade: [f32; 2] },
 }
 
 impl Drawn {
@@ -161,10 +162,10 @@ impl Drawn {
                 self.size = scene;
                 self.tint = shaded(shade);
             }
-            Base::Particles => {
+            Base::Particles { shade } => {
                 self.origin = [pose.origin[0], pose.origin[1]];
                 self.size = (pose.scale[0], pose.scale[1]);
-                self.tint = [1.0; 4];
+                self.tint = [shade[0], shade[0], shade[0], 1.0];
             }
         }
     }

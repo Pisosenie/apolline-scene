@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::system::{Between, Operator, Shape, System};
+use super::system::{Between, Operator, Shape, Sheet, System};
 
 /// Simulated in steps of a sixtieth of a second, whatever the frame rate.
 const RATE: f64 = 60.0;
@@ -21,6 +21,26 @@ pub struct Particle {
     age: f32,
     life: f32,
     born: Look,
+    /// The frame of a sprite sheet it shows, 0 to 1, when the system picks one at random.
+    pick: f32,
+}
+
+impl Particle {
+    /// How far through a sprite sheet it is, 0 to 1: its frame's place among the frames, and
+    /// how far on to the next.
+    pub fn sheet(&self, sheet: Sheet) -> f32 {
+        match sheet {
+            Sheet::Random => self.pick,
+            Sheet::Sequence(times) => {
+                let through = if self.life > 0.0 {
+                    self.age / self.life
+                } else {
+                    0.0
+                };
+                (through * times).fract()
+            }
+        }
+    }
 }
 
 /// What a particle started with, which the operators scale over its life.
@@ -110,6 +130,11 @@ impl Simulation {
         }
     }
 
+    /// How its particles show a sprite sheet.
+    pub fn sheet(&self) -> Sheet {
+        self.system.sheet
+    }
+
     /// Whether its particles are drawn in perspective.
     pub fn perspective(&self) -> bool {
         self.system.perspective
@@ -193,6 +218,12 @@ impl Simulation {
             age: 0.0,
             life: self.between(spawn.life),
             born,
+            // Drawn only for systems that use it, so the rest keep their random sequence.
+            pick: if system.sheet == Sheet::Random {
+                self.unit()
+            } else {
+                0.0
+            },
         }
     }
 

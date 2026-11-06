@@ -308,7 +308,11 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             }
             continue;
         };
-        for key in fields.keys().filter(|key| !known.contains(&key.as_str())) {
+        // A key left null says nothing, like the editor's `particlesrc`.
+        for (key, _) in fields
+            .iter()
+            .filter(|(key, value)| !known.contains(&key.as_str()) && !value.is_null())
+        {
             note(Missing::UnknownKey(format!("objects[{at}].{key}")));
         }
         let field = |name: &str| fields.get(name);
@@ -605,7 +609,7 @@ mod tests {
             {"text": {"script": "export function update(v) { return v; }", "value": "a"},
              "font": "fonts/a.ttf", "opaquebackground": true, "horizontalalign": "justify",
              "spacing": "2 0", "blockalign": true, "wobble": 1, "anchor": "middle"},
-            {"text": "b", "font": "", "maxwidth": {"value": 10, "animation": {"frames": []}}}
+            {"text": "b", "font": "", "maxwidth": {"value": 10, "animation": {"frames": []}}, "particlesrc": null}
         ]});
         assert_eq!(
             refusals(&scene),

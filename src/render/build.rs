@@ -212,8 +212,16 @@ impl<'a> Builder<'a> {
         };
         reserve(&mut self.allocated, super::swarm::Swarm::bytes(system))?;
         let seed = renderer.layers.len() as u64;
-        let swarm = unsafe { super::swarm::Swarm::new(self.gl, system, seed)? };
-        Ok(placed(step, None, Some(swarm), layer, Base::Particles))
+        let frames = &layer.texture.frames;
+        let swarm =
+            unsafe { super::swarm::Swarm::new(self.gl, system, frames, step.uv_max, seed)? };
+        Ok(placed(
+            step,
+            None,
+            Some(swarm),
+            layer,
+            Base::Particles { shade: layer.shade },
+        ))
     }
 
     /// The layer's own step and its effect passes drawn into targets, and the step that places

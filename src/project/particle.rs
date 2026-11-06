@@ -66,15 +66,24 @@ impl Project {
             ));
         }
         let combos = object(pass.get("combos"), 64, 64)?;
+        let values = object(pass.get("constantshadervalues"), 128, 128)?;
+        // Overbright brightens the sprites; any other value changes what the shader does.
+        let overbright = values.get("ui_editor_properties_overbright");
         if combos
             .values()
             .any(|value| number(Some(value)).is_none_or(|value| value != 0.0))
-            || !object(pass.get("constantshadervalues"), 128, 128)?.is_empty()
+            || values.len() > usize::from(overbright.is_some())
         {
             return Err(Error::Format(
                 "particle shader options need another renderer".into(),
             ));
         }
+        let overbright = match overbright {
+            None => 1.0,
+            Some(value) => number(Some(value))
+                .filter(|value| (0.0..=100.0).contains(value))
+                .ok_or_else(|| Error::Format("a particle overbright that isn't a number".into()))?,
+        };
         let blending = match text(pass.get("blending")) {
             None | Some("translucent") => Blending::Translucent,
             Some("additive") => Blending::Additive,
@@ -89,14 +98,25 @@ impl Project {
                 ));
             }
         };
+        // A sprite sheet's frames, one image's and all alike, which particles move through.
         if texture.animated() {
-            return Err(Error::Format(
-                "animated particle sprites need another renderer".into(),
-            ));
+            let first = texture.frames.first();
+            let alike = first.is_some_and(|first| {
+                texture.images.len() == 1
+                    && texture
+                        .frames
+                        .iter()
+                        .all(|frame| frame.across == first.across && frame.down == first.down)
+            });
+            if !alike {
+                return Err(Error::Format(
+                    "animated particle sprites need another renderer".into(),
+                ));
+            }
         }
         Ok(Layer {
             object: 0,
-            shade: [1.0; 2],
+            shade: [overbright, 1.0],
             image: Image {
                 name: placed.name.clone(),
                 model: placed.file.clone(),

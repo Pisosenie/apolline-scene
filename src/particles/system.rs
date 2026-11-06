@@ -20,6 +20,16 @@ pub struct System {
     /// Its particles are drawn in perspective: nearer ones bigger and further from the
     /// middle of the scene.
     pub perspective: bool,
+    /// How its sprite sheet's frames are shown, when its texture is one.
+    pub sheet: Sheet,
+}
+
+/// How a particle shows a sprite sheet: a frame picked at random when it's let out, or the
+/// frames in turn over its life, this many times over.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Sheet {
+    Random,
+    Sequence(f32),
 }
 
 /// The system flags that are drawn: worldspace and perspective rendering.
@@ -172,12 +182,15 @@ impl System {
         let flags = flags as u32;
         // Sprite sheets and child systems; control points matter only to the operators that
         // follow them, which are refused on their own.
-        if root
-            .get("animationmode")
-            .is_some_and(|mode| !mode.is_null())
-        {
-            return Err(refuse("particle sprite sheet animation"));
-        }
+        let sheet = match text(root.get("animationmode")) {
+            Some("randomframe") => Sheet::Random,
+            Some("sequence") | None => Sheet::Sequence(
+                number(root.get("sequencemultiplier"))
+                    .filter(|times| *times > 0.0 && *times <= 1000.0)
+                    .unwrap_or(1.0),
+            ),
+            Some(_) => return Err(refuse("particle sprite sheet animation")),
+        };
         if root
             .get("children")
             .is_some_and(|children| children.as_array().is_some_and(|list| !list.is_empty()))
@@ -222,6 +235,7 @@ impl System {
             operators,
             world: flags & WORLD != 0,
             perspective: flags & PERSPECTIVE != 0,
+            sheet,
         })
     }
 }
@@ -473,7 +487,7 @@ mod tests {
             ),
             (
                 r#""starttime": 2"#,
-                r#""starttime": 2, "animationmode": "randomframe""#,
+                r#""starttime": 2, "animationmode": "pingpong""#,
                 "sprite sheet",
             ),
             (
