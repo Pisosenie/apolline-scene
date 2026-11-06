@@ -18,6 +18,8 @@ pub(super) struct Material {
     pub shade: [f32; 2],
     /// A plain colour with no texture, which the layer's colour and size make.
     pub solid: bool,
+    /// A plain image material that plays its texture's frames in turn.
+    pub sprite: bool,
 }
 
 impl Project {
@@ -165,13 +167,14 @@ impl Project {
                 blending,
                 shade: [1.0; 2],
                 solid: true,
+                sprite: false,
             });
         }
         if matches!(
             shader,
             "genericimage" | "genericimage2" | "genericimage3" | "genericimage4"
         ) {
-            let shade = plain(&combos, &constants)?;
+            let (shade, sprite) = plain(&combos, &constants)?;
             if names.len() != 1 {
                 return Err(Error::Format(
                     "genericimage needs exactly one texture slot".into(),
@@ -184,6 +187,7 @@ impl Project {
                 blending,
                 shade,
                 solid: false,
+                sprite,
             });
         }
         let fragment = self.custom(shader, &combos, &constants, &mut names, false, resources)?;
@@ -193,6 +197,7 @@ impl Project {
             blending,
             shade: [1.0; 2],
             solid: false,
+            sprite: false,
         })
     }
 
@@ -270,17 +275,23 @@ impl Project {
 }
 
 /// Wallpaper Engine's plain image shaders, in all their versions, draw what the built-in layer
-/// shader draws while lighting, reflection, fog and sprite sheets are off. Their `Brightness`
-/// and `Alpha` values come back as multipliers for the layer's own.
+/// shader draws while lighting, reflection and fog are off, and play a sprite sheet's frames.
+/// Their `Brightness` and `Alpha` values come back as multipliers for the layer's own, with
+/// whether the sheet plays. Older materials name combos in lower case.
 fn plain(
     combos: &serde_json::Map<String, Value>,
     constants: &serde_json::Map<String, Value>,
-) -> Result<[f32; 2], Error> {
+) -> Result<([f32; 2], bool), Error> {
+    let mut sprite = false;
     for (name, value) in combos {
         let value = crate::value::number(Some(value));
-        let quiet = match name.as_str() {
-            "VERSION" | "version" => true,
+        let quiet = match name.to_ascii_uppercase().as_str() {
+            "VERSION" => true,
             "LIGHTING" | "REFLECTION" | "FOG" => value == Some(0.0),
+            "SPRITESHEET" if matches!(value, Some(0.0) | Some(1.0)) => {
+                sprite = value == Some(1.0);
+                true
+            }
             _ => false,
         };
         if !quiet {
@@ -305,7 +316,7 @@ fn plain(
             .filter(|value| value.is_finite())
             .ok_or_else(|| Error::Format("genericimage values must be numbers".into()))?;
     }
-    Ok(shade)
+    Ok((shade, sprite))
 }
 
 pub(super) fn object(

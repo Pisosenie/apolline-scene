@@ -119,6 +119,7 @@ impl Project {
             fullscreen: false,
             effects: Vec::new(),
             undrawn: Vec::new(),
+            sprite: false,
             particles: Some(Arc::new(system)),
             text: None,
         })

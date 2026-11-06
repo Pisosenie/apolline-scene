@@ -37,6 +37,7 @@ fn placed(
         visible: true,
         posed: layer.image.pose(),
         words: None,
+        sprite: None,
     };
     drawn.pose(&layer.image.pose());
     drawn
@@ -116,9 +117,25 @@ impl<'a> Builder<'a> {
             texture: inputs[0].texture,
             bytes: super::words::bytes(&layer.texture, !layer.effects.is_empty()),
         });
+        let sprite = if layer.sprite {
+            let mut images = vec![inputs[0].texture];
+            for image in 1..layer.texture.images.len() {
+                images.push(unsafe { self.image(renderer, &layer.texture, image)? });
+            }
+            Some(super::sprite::Sprite::new(&layer.texture.frames, &images))
+        } else {
+            None
+        };
+        // A sprite sheet's picture is one of its frames.
+        let picture = layer
+            .texture
+            .frame_size()
+            .filter(|_| layer.sprite)
+            .unwrap_or((layer.texture.image_width, layer.texture.image_height));
         let own = Step {
             program,
             uv_max: self.textures[&Arc::as_ptr(&layer.texture)].1,
+            sheet: None,
             channels: first.channels.count() as i32,
             inputs,
             constants,
@@ -127,8 +144,8 @@ impl<'a> Builder<'a> {
             (own, None)
         } else {
             let size = (
-                layer.texture.image_width.clamp(1, TARGET_SIDE),
-                layer.texture.image_height.clamp(1, TARGET_SIDE),
+                picture.0.clamp(1, TARGET_SIDE),
+                picture.1.clamp(1, TARGET_SIDE),
             );
             unsafe { self.chain(renderer, layer, own, size)? }
         };
@@ -142,20 +159,20 @@ impl<'a> Builder<'a> {
                 shade: layer.shade,
             }
         } else {
-            let natural = (
-                layer.texture.image_width as f32,
-                layer.texture.image_height as f32,
-            );
+            let natural = (picture.0 as f32, picture.1 as f32);
             Base::Picture {
                 size: image.size.unwrap_or(natural),
                 anchor: image.anchor,
                 shade: layer.shade,
             }
         };
-        Ok(Drawn {
+        let mut drawn = Drawn {
             words,
+            sprite,
             ..placed(step, chain, None, layer, base)
-        })
+        };
+        drawn.play(0.0);
+        Ok(drawn)
     }
 
     /// A particle system's layer: its sprite texture through our particle program.
@@ -217,6 +234,7 @@ impl<'a> Builder<'a> {
                 inputs,
                 channels: 4,
                 uv_max: [1.0; 2],
+                sheet: None,
                 constants,
             });
             passes.push(Pass {
@@ -247,6 +265,7 @@ impl<'a> Builder<'a> {
             }],
             channels: 4,
             uv_max: [1.0; 2],
+            sheet: None,
             constants: Vec::new(),
         };
         Ok((place, Some(chain)))
@@ -293,6 +312,27 @@ impl<'a> Builder<'a> {
                 texture.image_height.min(first.height) as f32,
             ],
         })
+    }
+
+    /// One of an animated texture's images after its first, on the GPU for a sprite sheet's
+    /// frames in it.
+    ///
+    /// # Safety
+    /// The GL context must be current on this thread.
+    unsafe fn image(
+        &mut self,
+        renderer: &mut Renderer,
+        texture: &Texture,
+        image: usize,
+    ) -> Result<glow::Texture, Error> {
+        let bytes: usize = texture.images[image]
+            .iter()
+            .map(|mip| mip.pixels.len())
+            .sum();
+        reserve(&mut self.allocated, bytes)?;
+        let (uploaded, _) = unsafe { upload::upload_image(self.gl, texture, image)? };
+        renderer.textures.push(uploaded);
+        Ok(uploaded)
     }
 
     /// The program for a fragment, shared by every fragment with the same sources, and its

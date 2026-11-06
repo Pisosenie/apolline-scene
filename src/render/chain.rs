@@ -72,6 +72,11 @@ impl Chain {
         }
     }
 
+    /// Draws again next time, whatever else has or hasn't changed.
+    pub fn touch(&self) {
+        self.drawn.set(None);
+    }
+
     /// The layer's own step, which reads its picture.
     pub fn own(&mut self) -> &mut Step {
         &mut self.steps[0]

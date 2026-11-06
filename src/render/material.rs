@@ -37,6 +37,8 @@ pub(super) unsafe fn program(gl: &glow::Context, fragment: &Fragment) -> Result<
             uv_max: gl
                 .get_uniform_location(id, "uv_max")
                 .or_else(|| gl.get_uniform_location(id, "apolline_uv_max")),
+            uv_at: None,
+            uv_sides: None,
             mvp: gl.get_uniform_location(id, "g_ModelViewProjectionMatrix"),
             layer_size: gl.get_uniform_location(id, "apolline_layer_size"),
             tint: gl.get_uniform_location(id, "apolline_layer_tint"),

@@ -8,6 +8,7 @@ mod compile;
 mod geometry;
 mod material;
 mod scripted;
+mod sprite;
 mod state;
 mod swarm;
 mod target;
@@ -33,14 +34,17 @@ const PARALLAX_REACH: f32 = 0.05;
 const VERTEX: &str = "
 uniform vec3 row0;
 uniform vec3 row1;
-uniform vec2 uv_max;
+// Where the picture's top left corner is in the texture, and its top and left sides.
+uniform vec2 uv_at;
+uniform vec4 uv_sides;
 out vec2 uv;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
     vec3 local = vec3(corner - 0.5, 1.0);
     gl_Position = vec4(dot(row0, local), dot(row1, local), 0.0, 1.0);
     // Textures keep their top row first.
-    uv = vec2(corner.x, 1.0 - corner.y) * uv_max;
+    vec2 across = vec2(corner.x, 1.0 - corner.y);
+    uv = uv_at + across.x * uv_sides.xy + across.y * uv_sides.zw;
 }";
 
 const FRAGMENT: &str = "
@@ -74,6 +78,9 @@ struct Step {
     inputs: Vec<Input>,
     channels: i32,
     uv_max: [f32; 2],
+    /// The frame of a sprite sheet it draws, as `[corner, across, down]` in the texture, in
+    /// place of the picture inside `uv_max`.
+    sheet: Option<[f32; 6]>,
     constants: Values,
 }
 
@@ -98,6 +105,8 @@ struct Drawn {
     posed: Pose,
     /// A text layer's words, which scripts may change.
     words: Option<words::Words>,
+    /// The frames of a sprite sheet, which play as time goes on.
+    sprite: Option<sprite::Sprite>,
 }
 
 /// How a layer is placed from where its object is.
@@ -167,6 +176,8 @@ struct Program {
     row0: Option<glow::UniformLocation>,
     row1: Option<glow::UniformLocation>,
     uv_max: Option<glow::UniformLocation>,
+    uv_at: Option<glow::UniformLocation>,
+    uv_sides: Option<glow::UniformLocation>,
     mvp: Option<glow::UniformLocation>,
     layer_size: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
@@ -261,13 +272,17 @@ impl Renderer {
         self.stage = Some(Box::new(stage));
     }
 
-    /// Runs a frame of the scene's scripts, at the host's scene time, and moves, shows and
-    /// hides layers and their effects, gives effects new values and changes words the way
-    /// they say. Hosts call it before each `draw_timed`.
+    /// Runs a frame of the scene's scripts and timelines, at the host's scene time, and
+    /// moves, shows and hides layers and their effects, gives effects new values and changes
+    /// words the way they say; sprite sheets turn to the frame for that time. Hosts call it
+    /// before each `draw_timed`.
     ///
     /// # Safety
     /// `gl` has to be current on this thread, the one the renderer was made on.
     pub unsafe fn animate(&mut self, gl: &glow::Context, time: f32, delta: f32) {
+        for layer in &mut self.layers {
+            layer.play(time);
+        }
         let Some(stage) = self.stage.as_mut() else {
             return;
         };
@@ -300,7 +315,10 @@ impl Renderer {
     /// updates.
     pub fn animated(&self) -> bool {
         self.stage.is_some()
-            || self.layers.iter().any(|layer| layer.swarm.is_some())
+            || self
+                .layers
+                .iter()
+                .any(|layer| layer.swarm.is_some() || layer.sprite.is_some())
             || self.programs.iter().any(|program| {
                 program
                     .frame
@@ -522,6 +540,17 @@ unsafe fn bind(
         gl.uniform_3_f32_slice(program.row0.as_ref(), &affine[0]);
         gl.uniform_3_f32_slice(program.row1.as_ref(), &affine[1]);
         gl.uniform_2_f32_slice(program.uv_max.as_ref(), &step.uv_max);
+        let [x, y, across_x, across_y, down_x, down_y] =
+            step.sheet
+                .unwrap_or([0.0, 0.0, step.uv_max[0], 0.0, 0.0, step.uv_max[1]]);
+        gl.uniform_2_f32(program.uv_at.as_ref(), x, y);
+        gl.uniform_4_f32(
+            program.uv_sides.as_ref(),
+            across_x,
+            across_y,
+            down_x,
+            down_y,
+        );
         if program.mvp.is_some() {
             gl.uniform_matrix_4_f32_slice(
                 program.mvp.as_ref(),
@@ -567,6 +596,8 @@ unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Pr
             let row0 = uniform("row0");
             let row1 = uniform("row1");
             let uv_max = uniform("uv_max");
+            let uv_at = uniform("uv_at");
+            let uv_sides = uniform("uv_sides");
             let tint = uniform("tint");
             let sampler = uniform("picture");
             let vao = gl.create_vertex_array().map_err(fail)?;
@@ -578,6 +609,8 @@ unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str) -> Result<Pr
                 row0,
                 row1,
                 uv_max,
+                uv_at,
+                uv_sides,
                 mvp: None,
                 layer_size: uniform("apolline_layer_size"),
                 tint,

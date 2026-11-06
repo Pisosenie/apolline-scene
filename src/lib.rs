@@ -59,6 +59,10 @@ impl<'a> Reader<'a> {
         self.at
     }
 
+    pub fn remaining(&self) -> usize {
+        self.data.len() - self.at
+    }
+
     pub fn bytes(&mut self, len: usize) -> Result<&'a [u8], Error> {
         let end = self
             .at

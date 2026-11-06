@@ -10,6 +10,10 @@ use image::{DynamicImage, ImageDecoder, ImageReader};
 use crate::dxt;
 use crate::{Error, MAX_TEXTURE_BYTES, Reader};
 
+mod frames;
+
+pub use frames::Frame;
+
 const MAX_DIMENSION: u32 = 16384;
 const MAX_IMAGES: usize = 1024;
 const MAX_MIPS: usize = 15;
@@ -79,6 +83,8 @@ pub struct Texture {
     pub image_height: u32,
     /// Each image's mipmaps, largest first; more than one image only when animated.
     pub images: Vec<Vec<Mip>>,
+    /// An animation's frames, in order; none for a still picture.
+    pub frames: Vec<Frame>,
 }
 
 impl Texture {
@@ -97,6 +103,7 @@ impl Texture {
                 channels: Channels::Rgba,
                 pixels: vec![255; 4],
             }]],
+            frames: Vec::new(),
         }
     }
 
@@ -169,6 +176,15 @@ impl Texture {
             }
             images.push(levels);
         }
+        let frames = if flags & ANIMATED != 0 {
+            let sizes: Vec<(u32, u32)> = images
+                .iter()
+                .map(|mips| (mips[0].width, mips[0].height))
+                .collect();
+            frames::read(&mut reader, &sizes)?
+        } else {
+            Vec::new()
+        };
         Ok(Texture {
             format,
             flags,
@@ -177,6 +193,17 @@ impl Texture {
             image_width,
             image_height,
             images,
+            frames,
+        })
+    }
+
+    /// The size of an animation's frames, in whole pixels.
+    pub fn frame_size(&self) -> Option<(u32, u32)> {
+        self.frames.first().map(|frame| {
+            (
+                (frame.size.0.round() as u32).clamp(1, MAX_DIMENSION),
+                (frame.size.1.round() as u32).clamp(1, MAX_DIMENSION),
+            )
         })
     }
 

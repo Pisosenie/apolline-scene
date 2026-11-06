@@ -44,7 +44,8 @@ A scene that uses something not done yet goes on falling back to `linux-wallpape
 
 60 of the most subscribed scenes and what they pull in (81 scene projects), surveyed
 2026-11-06 with `tools/survey-set.py` and `examples/survey.rs`. Eight drew natively whole and
-match their authors' previews; with scripts and text layers drawn, nine do. What holds the
+match their authors' previews; with scripts and text layers drawn, nine do, and with sprite
+sheets eleven. What holds the
 rest, by scenes:
 
 - SceneScript, 32: mostly scripted origin, scale and alpha, and clocks in text layers. Scripts
@@ -99,7 +100,13 @@ than a lossless fallback.
 7. Multi-pass effects with named targets, once the survey shows their structure.
 8. Scene-level targets (`_rt_FullFrameBuffer`, bloom), once previews can be compared.
 
-**C. Animated textures**: the frame plumbing now, `TEXS` parsing once real headers are known.
+**C. Animated textures**, done for sprite sheets: an animated texture's `TEXS` section, read
+from the 23 in the survey, lists its frames, each an image, a time and a place: the corner of
+the box it fills and its top and left sides, which run backwards for a frame turned in the
+sheet (v1 in whole pixels, v2 and v3 in floats, v3 with the frames' size in front). A stock
+image material with `SPRITESHEET` plays them in turn, each for its own time, looping; the
+layer is a frame's size, and a sheet of several images switches between them. Particles with
+animated sprites are still refused.
 
 **D. Particles**: a deterministic simulation core (emitters, initializers, operators as the
 documentation names them, seeded), then parsing once the survey gives the JSON keys, then

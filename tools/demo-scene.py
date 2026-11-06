@@ -16,6 +16,7 @@ demos.add_argument("--vertex-demo", action="store_true", help="draw the sky and 
 demos.add_argument("--effect-demo", action="store_true", help="put effects on the sky and sun that undo each other, so it draws what the plain demo draws")
 demos.add_argument("--effect-script-demo", action="store_true", help="the effect demo with a black tint and inversions in the wrong places, which scripts put right")
 demos.add_argument("--animation-demo", action="store_true", help="the effect demo with the brick misplaced, the glow dimmed and the tint black, which timelines put right by the first second")
+demos.add_argument("--sprite-demo", action="store_true", help="make the sun a sprite sheet of junk, the sun turned in the sheet and the sun, which shows from 1 s")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -227,6 +228,27 @@ if args.animation_demo:
     white["options"] = {"fps": 30, "length": 10, "mode": "single"}
     scene["objects"][0]["effects"][0]["passes"][0]["constantshadervalues"]["color"] = {"value": "0 0 0", "animation": white}
     files["scene.json"] = json.dumps(scene).encode()
+if args.sprite_demo:
+    # A sheet 50 by 16: junk, then the sun lying turned so its top runs up the sheet, then the
+    # sun as it is, each frame after a gutter column copying its edge, as atlases pad them.
+    # The junk shows for half a second, the turned sun for another, then the sun for one; the
+    # turned one can come out a rounding off the plain sun, so the check shoots the last.
+    sheet = [[(255, 0, 0, 255)] * 50 for _ in range(16)]
+    texel = lambda x, y: tuple(sun[4 * (16 * y + x):4 * (16 * y + x) + 4])
+    for i in range(16):
+        for j in range(16):
+            sheet[15 - i][17 + j] = texel(i, j)
+            sheet[j][34 + i] = texel(i, j)
+    for y in range(16):
+        sheet[y][16] = sheet[y][17]
+        sheet[y][33] = sheet[y][34]
+    pixels = b"".join(bytes(pixel) for row in sheet for pixel in row)
+    frames = b"TEXS0002\0" + struct.pack("<I", 3)
+    frames += struct.pack("<if6f", 0, 0.5, 0, 0, 16, 0, 0, 16)
+    frames += struct.pack("<if6f", 0, 0.5, 17, 0, 0, -16, 16, 0)
+    frames += struct.pack("<if6f", 0, 1.0, 34, 0, 16, 0, 0, 16)
+    files["materials/sun.tex"] = tex(0, 50, 16, pixels, flags=2 | 4) + frames
+    files["materials/sun.json"] = b'{"passes": [{"shader": "genericimage2", "textures": ["sun"], "blending": "translucent", "combos": {"VERSION": 2, "SPRITESHEET": 1}}]}'
 if args.values_demo:
     # One program, two layers: each must come out in its own colour.
     files["materials/glow.json"] = b'{"passes": [{"shader": "demo/solid", "textures": ["glow"], "blending": "normal", "constantshadervalues": {"color": "0 1 0"}}]}'

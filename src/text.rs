@@ -334,6 +334,7 @@ fn texture(width: u32, height: u32, coverage: Vec<u8>) -> Texture {
         image_width: width,
         image_height: height,
         images,
+        frames: Vec::new(),
     }
 }
 

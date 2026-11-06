@@ -19,7 +19,7 @@ if [ "$(uname)" = Linux ]; then
 fi
 cargo build --quiet --example view --manifest-path "$root/Cargo.toml"
 view=${CARGO_TARGET_DIR:-$root/target}/debug/examples/view
-projects=(demo fragment mask wave vertex effect effect-script animation values particle inputs script text dialect)
+projects=(demo fragment mask wave vertex effect effect-script animation sprite values particle inputs script text dialect)
 python3 "$root/tools/demo-scene.py" "$work/demo" > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/fragment" --fragment-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/mask" --mask-demo > /dev/null
@@ -28,6 +28,7 @@ python3 "$root/tools/demo-scene.py" "$work/vertex" --vertex-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/effect" --effect-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/effect-script" --effect-script-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/animation" --animation-demo > /dev/null
+python3 "$root/tools/demo-scene.py" "$work/sprite" --sprite-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/values" --values-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/particle" --particle-demo > /dev/null
 python3 "$root/tools/demo-scene.py" "$work/inputs" --inputs-demo > /dev/null
@@ -86,9 +87,50 @@ raw = zlib.decompress(packed)
 print(list(raw[1:1 + (4 if color == 6 else 3)]), "all", hashlib.sha1(raw).hexdigest()[:12])
 PY
 }
+# The largest difference in any channel between two shots of one size.
+difference() {
+    python3 - "$1" "$2" <<'PY'
+import struct, sys, zlib
+def pixels(path):
+    data = open(path, "rb").read()
+    at, packed = 8, b""
+    while at < len(data):
+        size = struct.unpack(">I", data[at:at + 4])[0]
+        kind, body = data[at + 4:at + 8], data[at + 8:at + 8 + size]
+        at += 12 + size
+        if kind == b"IHDR":
+            width, height, color = struct.unpack(">I", body[:4])[0], struct.unpack(">I", body[4:8])[0], body[9]
+        if kind == b"IDAT":
+            packed += body
+    depth = 4 if color == 6 else 3
+    raw, stride, rows, above = zlib.decompress(packed), width * depth, [], bytearray(width * depth)
+    for row in range(height):
+        kind, line = raw[row * (stride + 1)], bytearray(raw[row * (stride + 1) + 1:(row + 1) * (stride + 1)])
+        for x in range(stride):
+            left = line[x - depth] if x >= depth else 0
+            up, corner = above[x], above[x - depth] if x >= depth else 0
+            if kind == 1:
+                line[x] = (line[x] + left) & 255
+            elif kind == 2:
+                line[x] = (line[x] + up) & 255
+            elif kind == 3:
+                line[x] = (line[x] + (left + up) // 2) & 255
+            elif kind == 4:
+                guess = left + up - corner
+                near = min((abs(guess - left), left), (abs(guess - up), up), (abs(guess - corner), corner), key=lambda pair: pair[0])
+                line[x] = (line[x] + near[1]) & 255
+        rows.append(line)
+        above = line
+    return b"".join(rows)
+a, b = pixels(sys.argv[1]), pixels(sys.argv[2])
+print(max(abs(x - y) for x, y in zip(a, b)) if len(a) == len(b) else 255)
+PY
+}
 for project in "${projects[@]}"; do
-    # Timelines are shot a second in, when they've put everything back.
+    # Timelines are shot a second in, when they've put everything back, and the sprite sheet
+    # on its last frame.
     when=(); [ "$project" = animation ] && when=(--time 1)
+    [ "$project" = sprite ] && when=(--time 1.25)
     "$view" --shot "$work/$project.png" ${when[@]+"${when[@]}"} "$work/$project" 2>&1 | sed "s/^/$project: /"
     pixel=$(first_pixel "$work/$project.png")
     echo "${pixel##* }" > "$work/$project.hash"
@@ -98,3 +140,5 @@ done
 for project in vertex effect effect-script animation inputs script; do
     cmp -s "$work/$project.hash" "$work/demo.hash" && echo "$project: same as demo" || echo "$project: DIFFERS from demo"
 done
+# A frame read from inside a sprite sheet rounds its way to the picture a little differently.
+[ "$(difference "$work/sprite.png" "$work/demo.png")" -le 1 ] && echo "sprite: within one of demo" || echo "sprite: DIFFERS from demo"

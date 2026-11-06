@@ -861,6 +861,44 @@ fn cached_failure_text_stays_bounded_before_it_is_copied_to_other_models() {
 }
 
 #[test]
+fn a_stock_image_pass_plays_a_sprite_sheets_frames() {
+    let folder = folder("sprite-sheet");
+    std::fs::create_dir_all(folder.join("materials")).unwrap();
+    std::fs::write(folder.join("project.json"), "{}").unwrap();
+    std::fs::write(folder.join("scene.json"), r#"{"general":{"orthogonalprojection":{"width":10,"height":10}},"objects":[{"image":"model.json"}]}"#).unwrap();
+    std::fs::write(folder.join("model.json"), r#"{"material":"material.json"}"#).unwrap();
+    std::fs::write(
+        folder.join("material.json"),
+        r#"{"passes":[{"shader":"genericimage2","textures":["sheet"],"combos":{"version":2,"spritesheet":1}}]}"#,
+    )
+    .unwrap();
+    let mut sheet = texture(4, 2);
+    sheet[22..26].copy_from_slice(&crate::tex::ANIMATED.to_le_bytes());
+    let still = sheet.clone();
+    sheet.extend(b"TEXS0002\0");
+    sheet.extend(2u32.to_le_bytes());
+    for x in [0.0f32, 2.0] {
+        sheet.extend(0i32.to_le_bytes());
+        for value in [0.1, x, 0.0, 2.0, 0.0, 0.0, 2.0] {
+            sheet.extend(f32::to_le_bytes(value));
+        }
+    }
+    std::fs::write(folder.join("materials/sheet.tex"), &sheet).unwrap();
+    let project = Project::open(&folder, None).unwrap();
+    let prepared = project.prepare().unwrap();
+    let layer = &prepared.layers[0];
+    assert!(layer.sprite);
+    assert_eq!(layer.texture.frames.len(), 2);
+    assert_eq!(layer.texture.frame_size(), Some((2, 2)));
+    assert!(project.prepare_still().is_err());
+    // Asked to play frames its texture hasn't.
+    std::fs::write(folder.join("materials/sheet.tex"), still).unwrap();
+    let refused = project.prepare().err().unwrap().to_string();
+    assert!(refused.contains("no frames"), "{refused}");
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
 fn a_stock_image_pass_with_render_state_draws_as_a_plain_layer() {
     let folder = folder("stock-pass");
     std::fs::create_dir_all(folder.join("materials")).unwrap();

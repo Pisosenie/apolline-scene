@@ -60,6 +60,8 @@ pub struct Layer {
     pub effects: Vec<EffectPass>,
     /// Its effects hidden at first that can't be drawn; scripts that show one fail.
     pub undrawn: effect::Undrawn,
+    /// Its texture's frames play in turn, as a sprite sheet.
+    pub sprite: bool,
     /// A particle system drawn with its texture, in place of a picture.
     pub particles: Option<Arc<crate::particles::System>>,
     /// How a text layer's words are drawn, for when its scripts change them.
@@ -129,6 +131,7 @@ struct Resolved {
     fullscreen: bool,
     shade: [f32; 2],
     solid: bool,
+    sprite: bool,
 }
 
 impl Project {
@@ -239,6 +242,7 @@ impl Project {
                 .chain(layer.effects.iter().map(|pass| &pass.fragment))
                 .any(|fragment| fragment.animated || fragment.reads.audio)
                 || layer.particles.is_some()
+                || layer.sprite
         }) || !prepared.scene.scripts.is_empty()
             || !prepared.scene.animations.is_empty()
         {
@@ -436,6 +440,7 @@ impl Project {
             fullscreen: resolved.fullscreen,
             effects,
             undrawn,
+            sprite: resolved.sprite,
             particles: None,
             text: None,
         })
@@ -464,6 +469,8 @@ impl Project {
         let mut decoded = Vec::with_capacity(names.len());
         for (slot, name) in names.into_iter().enumerate() {
             if let Some(name) = name {
+                // A sprite sheet's picture is the one texture read with its frames.
+                let still = still && !(material.sprite && slot == 0);
                 decoded.push(TextureInput {
                     slot: slot as u8,
                     texture: self.texture(&name, textures, remaining, still)?,
@@ -475,6 +482,11 @@ impl Project {
         } else {
             decoded.remove(0).texture
         };
+        if material.sprite && texture.frames.is_empty() {
+            return Err(Error::Format(
+                "a sprite sheet whose texture has no frames".into(),
+            ));
+        }
         Ok(Resolved {
             texture,
             secondary: decoded,
@@ -483,6 +495,7 @@ impl Project {
             fullscreen: flag(model.get("fullscreen")).unwrap_or(false),
             shade,
             solid: material.solid,
+            sprite: material.sprite,
         })
     }
 }

@@ -12,11 +12,20 @@ pub(super) unsafe fn upload(
     gl: &glow::Context,
     texture: &Texture,
 ) -> Result<(glow::Texture, [f32; 2]), Error> {
+    unsafe { upload_image(gl, texture, 0) }
+}
+
+/// One of the texture's images with its mipmaps, as `upload` gives the first.
+pub(super) unsafe fn upload_image(
+    gl: &glow::Context,
+    texture: &Texture,
+    image: usize,
+) -> Result<(glow::Texture, [f32; 2]), Error> {
     unsafe {
         let id = gl
             .create_texture()
             .map_err(|err| Error::Format(format!("a texture: {err}")))?;
-        match fill(gl, id, texture) {
+        match fill_image(gl, id, texture, image) {
             Ok(uv_max) => Ok((id, uv_max)),
             Err(error) => {
                 gl.delete_texture(id);
@@ -32,9 +41,18 @@ pub(super) unsafe fn fill(
     id: glow::Texture,
     texture: &Texture,
 ) -> Result<[f32; 2], Error> {
+    unsafe { fill_image(gl, id, texture, 0) }
+}
+
+unsafe fn fill_image(
+    gl: &glow::Context,
+    id: glow::Texture,
+    texture: &Texture,
+    image: usize,
+) -> Result<[f32; 2], Error> {
     let mips = texture
         .images
-        .first()
+        .get(image)
         .filter(|mips| !mips.is_empty())
         .ok_or_else(|| Error::Format("a texture without images".into()))?;
     let first = &mips[0];

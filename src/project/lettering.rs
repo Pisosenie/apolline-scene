@@ -56,6 +56,7 @@ impl Project {
             fullscreen: false,
             effects,
             undrawn,
+            sprite: false,
             particles: None,
             text: Some(Arc::new(lettering)),
         })
