@@ -25,14 +25,32 @@ one renders a frame without a shader failing to compile. These were added in the
 - The HLSL-to-GLSL conversion pass (`src/shader/dialect.rs`).
 - A 1 GiB GPU budget.
 
+## On the Linux machine (2026-11-06)
+
+Arch, niri, NVIDIA RTX 4070 Ti (driver 615) on desktop GL and on GLES through the daemon's EGL,
+two monitors (2560×1440 at 165 Hz, 1920×1080 at 100 Hz turned 270°). The Workshop set there has
+41 items, of which 27 prepare natively.
+
+- `tools/render-all.sh`: 9 of the 27 failed to compile at first, all for one reason: stock
+  `pulse` and the `*_downsample*` effects name a variable `sample`, a word GLSL ES keeps for
+  itself. Words like it are renamed after the dialect pass (`shader::unreserved`). All 27 draw.
+- A frame of each, next to its `preview.*`: every one matches but for the moment it was taken in.
+  The x-ray scenes looked wrong and weren't: the shot's pointer sits mid-screen, which is where
+  the effect reveals.
+- Profiling (gdb sampling `view`; perf wasn't installed) showed turbulence noise as most of the
+  CPU in particle-heavy scenes. `noise::field` now does the lattice once for its three noises:
+  2486266414 went from 35 % to 22 % of a core in the daemon at 30 fps. What's left is spread over
+  building particle vertices.
+- In apolline-wall on real outputs, through niri's DRM backend: drawn on both monitors, the
+  turned one too, 31 % of a core for that scene on two screens. Each screen runs its own
+  renderer, so two screens showing one scene simulate it twice; sharing one would halve that.
+- Not yet: the GLES-strictness pass over the rest of the 81-scene set, which isn't on this
+  machine, and Mesa (only NVIDIA here).
+
 ## What was never checked
 
-- **Real Linux GPUs.** Every shot and check so far ran on a Mac through desktop OpenGL 3.3.
-  `tools/gles-check.sh` and `tools/render-all.sh` are the first things to run on the new
-  machine. Under GLES, compilers are stricter about implicit int↔float conversions:
-  - stock shaders that pass on the Mac may fail there;
-  - `src/shader/dialect.rs` already spells most of those conversions out, but only where it can
-    work out the types.
+- **Mesa and AMD/Intel GPUs.** NVIDIA is checked (above); `tools/gles-check.sh` needs a
+  headless sway, which this machine doesn't have.
 - **Audio.** apolline-wall never feeds the spectrum, so audio-reactive scenes run as if in silence:
   - bars and rings stay empty;
   - emitters and turbulence that listen stay off.
