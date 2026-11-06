@@ -168,17 +168,16 @@ impl Template {
             .as_ref()
             .map(|options| options.controlled.clone())
             .unwrap_or_default();
+        // A combo the material sets is defined for both stages, declared or not, as the engine
+        // does; the vertex shader's own decide the fragment's branches too.
         for (name, value) in combos {
-            if controlled.contains(name) {
-                continue;
-            }
-            let in_vertex = vertex
-                .as_ref()
-                .is_some_and(|vertex| vertex.combos.contains_key(name));
-            if expansion.combos.contains_key(name) {
+            if !controlled.contains(name) {
                 expansion.combos.insert(name.clone(), integer(value)?);
-            } else if !in_vertex {
-                return Err(fail(format!("unknown combo {name}")));
+            }
+        }
+        if let Some(vertex) = &vertex {
+            for (name, default) in &vertex.combos {
+                expansion.combos.entry(name.clone()).or_insert(*default);
             }
         }
         let missing = optional.as_ref().map(|options| options.missing);
@@ -255,8 +254,11 @@ impl Template {
                 Some(source(VERTEX, &values, &stage.body, VERTEX_MAIN)?)
             }
             None => {
-                if let Some((name, _)) =
-                    bound.varyings.iter().find(|(name, _)| name != "v_TexCoord")
+                // Ours fills one plain v_TexCoord, not an array of them.
+                if let Some((name, _)) = bound
+                    .varyings
+                    .iter()
+                    .find(|(name, kind)| name != "v_TexCoord" || kind.contains('['))
                 {
                     return Err(fail(format!("unsupported varying {name}")));
                 }
@@ -495,11 +497,12 @@ impl<F: FnMut(&str) -> Result<Option<String>, Error>> Expansion<F> {
                 if self.combos.len() >= 64 {
                     return Err(fail("more than 64 combos"));
                 }
-                let value = integer(
-                    annotation
-                        .get("default")
-                        .ok_or_else(|| fail("combo has no default"))?,
-                )?;
+                // An option list without a default starts at its first, 0.
+                let value = annotation
+                    .get("default")
+                    .map(integer)
+                    .transpose()?
+                    .unwrap_or(0);
                 if self.combos.insert(combo.to_owned(), value).is_some() {
                     return Err(fail(format!("duplicate combo {combo}")));
                 }
@@ -724,7 +727,9 @@ mod tests {
         ] {
             assert!(prepare(declaration, json!({}), json!({})).is_err());
         }
-        assert!(prepare("void main() {}", json!({"UNKNOWN":1}), json!({})).is_err());
+        // A combo the shader doesn't declare is still defined, as the engine defines it.
+        let undeclared = prepare("void main() {}", json!({"UNKNOWN":1}), json!({})).unwrap();
+        assert!(undeclared.source.contains("#define UNKNOWN 1"));
         assert!(prepare("void main() {}", json!({}), json!({"ignored":1})).is_err());
         assert!(prepare("uniform float amount;", json!({}), json!({"amount":"nan"})).is_err());
         assert!(prepare("uniform vec3 color;", json!({}), json!({"color":[1,2]})).is_err());

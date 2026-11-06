@@ -166,12 +166,33 @@ pub(super) fn bind(
                 continue;
             }
         }
-        if declaration[3].text != ";" || !super::identifier(name) || !seen.insert(name) {
+        // A varying may be an array, as blurs pass their taps: `varying vec2 v_TexCoord[13];`.
+        // Its length comes digit by digit, as the tokens split numbers.
+        let mut length = None;
+        let mut ends = 4;
+        if token.text == "varying" && declaration[3].text == "[" {
+            let rest = &tokens[index + 4..];
+            let close = rest.iter().take(3).position(|token| token.text == "]");
+            let digits: Option<String> =
+                close.map(|close| rest[..close].iter().map(|token| token.text).collect());
+            if let (Some(close), Some(digits)) = (close, digits)
+                && rest.get(close + 1).is_some_and(|end| end.text == ";")
+                && let Ok(count) = digits.parse::<u8>()
+                && (1..=32).contains(&count)
+            {
+                length = Some(count);
+                ends = 4 + close + 2;
+            }
+        }
+        if (length.is_none() && declaration[3].text != ";")
+            || !super::identifier(name)
+            || !seen.insert(name)
+        {
             return Err(fail(
                 "arrays, duplicate declarations and complex uniforms are unsupported",
             ));
         }
-        index += 4;
+        index += ends;
         if token.text == "attribute" {
             // The host gives these as plain globals, set before the shader's own main.
             if !matches!(
@@ -197,7 +218,12 @@ pub(super) fn bind(
             if name.starts_with("g_") || varyings.len() >= 16 {
                 return Err(fail(format!("unsupported varying {name}")));
             }
-            varyings.push((name.to_owned(), kind.to_owned()));
+            // An array's length is part of its type, which both stages have to agree on.
+            let kind = match length {
+                Some(count) => format!("{kind}[{count}]"),
+                None => kind.to_owned(),
+            };
+            varyings.push((name.to_owned(), kind));
             continue;
         }
         let annotation = annotation(source, declaration[3].end, name)?;
