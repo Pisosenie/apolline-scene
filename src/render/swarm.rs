@@ -89,6 +89,7 @@ impl Swarm {
         uv_max: [f32; 2],
         ratio: f32,
         seed: u64,
+        capacity: usize,
     ) -> Result<Self, Error> {
         let fail = |what: String| Error::Format(format!("a particle buffer: {what}"));
         unsafe {
@@ -104,7 +105,7 @@ impl Swarm {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
             gl.buffer_data_size(
                 glow::ARRAY_BUFFER,
-                (system.max.max(1) * FLOATS * 4) as i32,
+                (Self::bytes(capacity)) as i32,
                 glow::STREAM_DRAW,
             );
             let stride = (FLOATS * 4) as i32;
@@ -129,8 +130,10 @@ impl Swarm {
                 ),
                 None => (vec![[0.0; 2]], [uv_max[0], 0.0, 0.0, uv_max[1]]),
             };
+            let mut simulation = Simulation::new(Arc::clone(system), seed);
+            simulation.allow(capacity);
             Ok(Swarm {
-                simulation: RefCell::new(Simulation::new(Arc::clone(system), seed)),
+                simulation: RefCell::new(simulation),
                 vao,
                 buffer,
                 corners,
@@ -144,9 +147,19 @@ impl Swarm {
         }
     }
 
-    /// Bytes its buffer holds.
-    pub fn bytes(system: &System) -> usize {
-        system.max.max(1) * FLOATS * 4
+    /// Bytes its buffer holds for `capacity` particles.
+    pub fn bytes(capacity: usize) -> usize {
+        capacity.max(1) * FLOATS * 4
+    }
+
+    /// Scales one of the system's instance overrides by `factor` from where it started.
+    pub fn tune(&self, key: &str, factor: f32) {
+        self.simulation.borrow_mut().tune(key, factor);
+    }
+
+    /// Whether it listens to the music.
+    pub fn listens(&self) -> bool {
+        self.simulation.borrow().listens()
     }
 
     /// Whether its particles follow the pointer.
@@ -172,8 +185,12 @@ impl Swarm {
         angle: f32,
         camera: ([f32; 2], f32),
         pointer: [f32; 2],
+        spectrum: &[[f32; 64]; 2],
     ) -> i32 {
         let mut simulation = self.simulation.borrow_mut();
+        if simulation.listens() {
+            simulation.hear(spectrum);
+        }
         let (sin, cos) = angle.sin_cos();
         if simulation.points() {
             let [x, y] = [pointer[0] - origin[0], pointer[1] - origin[1]];

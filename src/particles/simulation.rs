@@ -73,12 +73,53 @@ pub struct Simulation {
     taken: u64,
     /// Where the pointer is in the system's own units, for control points locked to it.
     pointer: Option<[f32; 2]>,
+    /// What scripts scale the system's instance overrides by as it runs.
+    tuning: Tuning,
+    /// The most particles there's room for, whatever its count is tuned to.
+    most: usize,
+    /// What share of its rate each emitter lets out at how loud the music is now.
+    heard: Vec<f32>,
+}
+
+/// How much more of each instance override than the system started with.
+#[derive(Clone, Copy, Debug)]
+struct Tuning {
+    count: f32,
+    rate: f32,
+    life: f32,
+    size: f32,
+    alpha: f32,
+    speed: f32,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Tuning {
+            count: 1.0,
+            rate: 1.0,
+            life: 1.0,
+            size: 1.0,
+            alpha: 1.0,
+            speed: 1.0,
+        }
+    }
 }
 
 impl Simulation {
     /// Starts the system as the scene finds it, already `warmup` seconds in.
     pub fn new(system: Arc<System>, seed: u64) -> Self {
+        let silence = [[0.0; 64]; 2];
+        let heard = system
+            .emitters
+            .iter()
+            .map(|emitter| {
+                emitter
+                    .hearing
+                    .map_or(1.0, |hearing| hearing.share(&silence))
+            })
+            .collect();
         let mut simulation = Simulation {
+            heard,
             owed: vec![0.0; system.emitters.len()],
             system,
             seed,
@@ -88,6 +129,8 @@ impl Simulation {
             steps: 0,
             taken: 0,
             pointer: None,
+            tuning: Tuning::default(),
+            most: usize::MAX,
         };
         simulation.restart();
         simulation
@@ -103,7 +146,7 @@ impl Simulation {
         self.taken = 0;
         for at in 0..self.system.emitters.len() {
             for _ in 0..self.system.emitters[at].burst {
-                if self.particles.len() < self.system.max {
+                if self.particles.len() < self.room() {
                     let particle = self.spawn(at);
                     self.particles.push(particle);
                 }
@@ -153,6 +196,52 @@ impl Simulation {
         })
     }
 
+    /// Whether an emitter lets particles out as loud as the music is.
+    pub fn listens(&self) -> bool {
+        self.system
+            .emitters
+            .iter()
+            .any(|emitter| emitter.hearing.is_some())
+    }
+
+    /// The music is this loud now, left and right, in 64 bins from low to high.
+    pub fn hear(&mut self, spectrum: &[[f32; 64]; 2]) {
+        for (heard, emitter) in self.heard.iter_mut().zip(&self.system.emitters) {
+            if let Some(hearing) = emitter.hearing {
+                *heard = hearing.share(spectrum);
+            }
+        }
+    }
+
+    /// Room for `most` particles, which a tuned count stays within.
+    pub fn allow(&mut self, most: usize) {
+        self.most = most;
+    }
+
+    /// Scales instance override `key` by `factor` from what the system started with.
+    pub fn tune(&mut self, key: &str, factor: f32) {
+        let factor = if factor.is_finite() {
+            factor.clamp(0.0, 1000.0)
+        } else {
+            1.0
+        };
+        let tuning = &mut self.tuning;
+        match key {
+            "count" => tuning.count = factor,
+            "rate" => tuning.rate = factor,
+            "lifetime" => tuning.life = factor,
+            "size" => tuning.size = factor,
+            "alpha" => tuning.alpha = factor,
+            "speed" => tuning.speed = factor,
+            _ => {}
+        }
+    }
+
+    /// How many particles may be alive now.
+    fn room(&self) -> usize {
+        ((self.system.max as f32 * self.tuning.count) as usize).min(self.most)
+    }
+
     /// The pointer moved to `at` in the system's own units.
     pub fn point(&mut self, at: [f32; 2]) {
         self.pointer = Some(at);
@@ -185,10 +274,10 @@ impl Simulation {
         self.particles
             .retain(|particle| particle.age < particle.life);
         for (at, emitter) in system.emitters.iter().enumerate() {
-            self.owed[at] += emitter.rate * STEP;
+            self.owed[at] += emitter.rate * self.tuning.rate * self.heard[at] * STEP;
             while self.owed[at] >= 1.0 {
                 self.owed[at] -= 1.0;
-                if self.particles.len() < system.max {
+                if self.particles.len() < self.room() {
                     let particle = self.spawn(at);
                     self.particles.push(particle);
                 }
@@ -240,8 +329,9 @@ impl Simulation {
                 }
             }
         }
-        let size = self.between(spawn.size);
-        let alpha = self.between(spawn.alpha);
+        let tuning = self.tuning;
+        let size = self.between(spawn.size) * tuning.size;
+        let alpha = self.between(spawn.alpha) * tuning.alpha;
         let color = self.within(spawn.color);
         let rotation = self.within(spawn.rotation);
         let born = Look { size, alpha, color };
@@ -260,6 +350,7 @@ impl Simulation {
                 }
             }
         }
+        let velocity = velocity.map(|velocity| velocity * tuning.speed);
         Particle {
             position: [0, 1, 2].map(|axis| emitter.origin[axis] + offset[axis]),
             size,
@@ -269,7 +360,7 @@ impl Simulation {
             velocity,
             spin: self.within(spawn.spin),
             age: 0.0,
-            life: self.between(spawn.life),
+            life: (self.between(spawn.life) * tuning.life).max(0.001),
             born,
             // Drawn only for systems that use it, so the rest keep their random sequence.
             pick: if system.sheet == Sheet::Random {
@@ -614,6 +705,50 @@ mod tests {
             near(&pushed),
             near(&away)
         );
+    }
+
+    #[test]
+    fn scripts_scale_a_running_system_within_its_room() {
+        let mut quiet = Simulation::new(system(FOUNTAIN), 7);
+        quiet.tune("rate", 0.0);
+        quiet.advance(0.5);
+        assert!(quiet.particles().is_empty());
+        let mut crowded = Simulation::new(system(FOUNTAIN), 7);
+        crowded.allow(80);
+        crowded.tune("rate", 20.0);
+        crowded.tune("count", 10.0);
+        crowded.advance(0.9);
+        assert_eq!(crowded.particles().len(), 80);
+        let mut plain = Simulation::new(system(FOUNTAIN), 7);
+        plain.advance(0.9);
+        assert!(plain.particles().len() < 50);
+        // They start twice the size, before the operators shrink them.
+        let largest = |simulation: &Simulation| {
+            let sizes = simulation.particles().iter().map(|particle| particle.size);
+            sizes.fold(0.0f32, f32::max)
+        };
+        let mut sized = Simulation::new(system(FOUNTAIN), 7);
+        sized.tune("size", 2.0);
+        sized.advance(0.9);
+        assert!((largest(&sized) / largest(&plain) - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn an_emitter_that_hears_lets_particles_out_only_to_music() {
+        let listening = FOUNTAIN.replace(
+            r#""rate": 30,"#,
+            r#""rate": 30, "audioprocessingmode": 3, "audioprocessingbounds": "0.2 0.6","#,
+        );
+        let mut quiet = Simulation::new(system(&listening), 3);
+        assert!(quiet.listens());
+        quiet.advance(0.5);
+        assert!(quiet.particles().is_empty());
+        let mut loud = Simulation::new(system(&listening), 3);
+        loud.hear(&[[0.8; 64]; 2]);
+        loud.advance(0.5);
+        let mut plain = Simulation::new(system(FOUNTAIN), 3);
+        plain.advance(0.5);
+        assert_eq!(loud.particles().len(), plain.particles().len());
     }
 
     #[test]

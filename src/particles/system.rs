@@ -92,6 +92,8 @@ pub struct Emitter {
     pub speed: [f32; 2],
     /// Particles let out at once when it starts.
     pub burst: usize,
+    /// How loud the music has to be for it to let particles out.
+    pub hearing: Option<super::audio::Hearing>,
 }
 
 /// A value drawn at random between two bounds.
@@ -415,7 +417,9 @@ fn emitter(value: &Value) -> Result<Emitter, Error> {
         Some("sphererandom") => Shape::Sphere,
         other => return Err(refuse(&format!("emitter {}", name(other)))),
     };
-    known(value, EMITTER, "emitter")?;
+    let keys: Vec<&str> = EMITTER.iter().chain(super::audio::KEYS).copied().collect();
+    known(value, &keys, "emitter")?;
+    let hearing = super::audio::hearing(value, refuse)?;
     let rate = number(value.get("rate")).unwrap_or(5.0);
     // How many are let out stays within the system's count, however fast it asks.
     if !(0.0..=100_000.0).contains(&rate) {
@@ -454,6 +458,7 @@ fn emitter(value: &Value) -> Result<Emitter, Error> {
             number(value.get("speedmax")).unwrap_or(0.0),
         ],
         burst: burst as usize,
+        hearing,
     })
 }
 
@@ -747,8 +752,8 @@ mod tests {
             ),
             (
                 r#""name": "boxrandom""#,
-                r#""name": "boxrandom", "audioprocessingmode": 3"#,
-                "emitter field audioprocessingmode",
+                r#""name": "boxrandom", "audioprocessingmode": 1"#,
+                "audio response on one channel",
             ),
             (
                 r#""renderer": [{"name": "sprite"}]"#,

@@ -11,8 +11,8 @@ use serde_json::Value;
 
 pub use bloom::Bloom;
 pub use check::Missing;
-pub(crate) use effects::Driven;
 pub use effects::Effect;
+pub(crate) use effects::{Driven, Knob};
 pub use timeline::{Key, Mode, Timeline};
 
 use crate::Error;
@@ -91,6 +91,8 @@ pub enum Target {
         pass: usize,
         name: String,
     },
+    /// One of a particle system's instance overrides, which scale it as it runs.
+    Override(&'static str),
 }
 
 impl Script {
@@ -103,11 +105,15 @@ impl Script {
                 let name: String = name.chars().take(64).collect();
                 format!("effects[{effect}].passes[{pass}].{name}")
             }
+            Target::Override(key) => format!("instanceoverride.{key}"),
         }
     }
 }
 
 /// The object values a script can be on.
+/// The instance overrides scripts may change as a particle system runs.
+pub(crate) const OVERRIDES: &[&str] = &["alpha", "count", "lifetime", "rate", "size", "speed"];
+
 pub(crate) const SCRIPTABLE: &[&str] = &[
     "origin",
     "scale",
@@ -689,8 +695,32 @@ fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
             });
         }
         found.extend(effects::scripts(at, objects));
+        if matches!(object, Object::Particles(_)) {
+            found.extend(override_scripts(at, value));
+        }
     }
     found
+}
+
+/// The scripts on a particle system's instance overrides.
+fn override_scripts(object: usize, value: &Value) -> Vec<Script> {
+    let overrides = value.get("instanceoverride").and_then(Value::as_object);
+    OVERRIDES
+        .iter()
+        .filter_map(|&key| {
+            let fields = overrides?.get(key)?.as_object()?;
+            Some(Script {
+                object,
+                target: Target::Override(key),
+                source: fields.get("script")?.as_str()?.to_owned(),
+                properties: fields
+                    .get("scriptproperties")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 /// The object id `_rt_imageLayerComposite_17_a` names: another layer's finished picture, its

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::Drawn;
-use crate::scene::Scene;
+use crate::scene::{Knob, Object, Scene};
 
 /// Where what the scripts say about effects lands in the drawn layers.
 #[derive(Default)]
@@ -15,6 +15,9 @@ pub(super) struct Wiring {
     /// For each effect value scripts or timelines drive, as `Scene::driven` lists them: the
     /// layers, steps and constants it sets.
     knobs: Vec<Vec<(usize, usize, usize)>>,
+    /// For each instance override they drive, likewise: the particle layers it scales, and
+    /// the value it started from, which the system was made with.
+    tunes: Vec<Vec<(usize, &'static str, f32)>>,
 }
 
 impl Wiring {
@@ -50,9 +53,15 @@ impl Wiring {
         let knobs = scene
             .driven
             .iter()
-            .map(|driven| (driven.object, driven.effect, driven.pass, &driven.name))
-            .map(|(object, effect, pass, name)| {
+            .map(|driven| match &driven.knob {
+                Knob::Effect { effect, pass, name } => Some((driven.object, *effect, *pass, name)),
+                Knob::Override(_) => None,
+            })
+            .map(|knob| {
                 let mut found = Vec::new();
+                let Some((object, effect, pass, name)) = knob else {
+                    return found;
+                };
                 for (at, chain) in chained(object) {
                     for (step, drawn) in chain.steps_of(effect) {
                         if drawn.pass != pass {
@@ -68,7 +77,30 @@ impl Wiring {
                 found
             })
             .collect();
-        Wiring { switches, knobs }
+        let tunes = scene
+            .driven
+            .iter()
+            .map(|driven| {
+                let Knob::Override(key) = driven.knob else {
+                    return Vec::new();
+                };
+                let Some(Object::Particles(particles)) = scene.objects.get(driven.object) else {
+                    return Vec::new();
+                };
+                let start = crate::value::number(particles.overrides.get(key)).unwrap_or(1.0);
+                layers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, layer)| layer.object == driven.object && layer.swarm.is_some())
+                    .map(|(at, _)| (at, key, start))
+                    .collect()
+            })
+            .collect();
+        Wiring {
+            switches,
+            knobs,
+            tunes,
+        }
     }
 
     /// Shows and hides effects and sets their values as the scripts now have them; a layer
@@ -85,6 +117,15 @@ impl Wiring {
             for &(at, step, constant) in knob {
                 if let Some(chain) = layers[at].chain.as_mut() {
                     chain.set(step, constant, numbers);
+                }
+            }
+        }
+        for (tune, &[value, ..]) in self.tunes.iter().zip(values) {
+            for &(at, key, start) in tune {
+                if let Some(swarm) = &layers[at].swarm
+                    && start.abs() > 1e-6
+                {
+                    swarm.tune(key, value / start);
                 }
             }
         }

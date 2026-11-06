@@ -452,7 +452,13 @@ impl Renderer {
                     .filter_map(|layer| layer.swarm.as_ref())
                     .any(swarm::Swarm::points),
             daytime: daytime || frames().any(|frame| frame.daytime.is_some()),
-            audio: audio || frames().any(material::Frame::listens),
+            audio: audio
+                || frames().any(material::Frame::listens)
+                || self
+                    .layers
+                    .iter()
+                    .filter_map(|layer| layer.swarm.as_ref())
+                    .any(swarm::Swarm::listens),
         }
     }
 
@@ -623,6 +629,7 @@ impl Renderer {
                             layer.angle,
                             camera,
                             pointer,
+                            &self.inputs.spectrum,
                         );
                         gl.bind_vertex_array(Some(swarm.vao));
                         gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, count);

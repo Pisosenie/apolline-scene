@@ -138,7 +138,13 @@ screen through the scene's placement into the system's own units. `controlpointa
 speeds particles within its threshold towards one, or away for a negative scale, so
 cursor-avoiding dust and smoke work; a system that does makes the scene need the pointer.
 Control points with other flags (children's, 4 and 16) refuse the operators that use them.
-Systems may hold 50 000 particles and ask for any rate up to 100 000 a second.
+Systems may hold 50 000 particles and ask for any rate up to 100 000 a second. Scripts on
+instance overrides (`count`, `rate`, `lifetime`, `size`, `alpha`, `speed`) run like those on
+effect values: each is a driven value, and what it returns scales the running system by its
+share of the value it started from, which the system was made with; a scripted count gets
+room for the most particles. Emitters with an audio response (mode 3, both channels) let
+out as much of their rate as the music is loud over their bands between their bounds, none
+in silence; one-channel modes, and audio responses anywhere else, are refused.
 
 **F. SceneScript**, done for objects: each `{script, scriptproperties, value}` on an image,
 particle system or group's `origin`, `scale`, `angles`, `color`, `alpha`, `brightness` or

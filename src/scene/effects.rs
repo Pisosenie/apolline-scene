@@ -131,30 +131,41 @@ pub(super) fn animations(object: usize, objects: &[Object]) -> Vec<Animated> {
     found
 }
 
-/// An effect value scripts or timelines drive.
+/// A value of an object's that scripts or timelines drive.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Driven {
     pub object: usize,
-    pub effect: usize,
-    pub pass: usize,
-    pub name: String,
+    pub knob: Knob,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Knob {
+    /// A value one of its effects gives a pass's shader, by the material's name for it.
+    Effect {
+        effect: usize,
+        pass: usize,
+        name: String,
+    },
+    /// One of a particle system's instance overrides.
+    Override(&'static str),
 }
 
 impl Driven {
     pub fn of(object: usize, target: &Target) -> Option<Self> {
-        match target {
-            Target::Value { effect, pass, name } => Some(Driven {
-                object,
+        let knob = match target {
+            Target::Value { effect, pass, name } => Knob::Effect {
                 effect: *effect,
                 pass: *pass,
                 name: name.clone(),
-            }),
-            _ => None,
-        }
+            },
+            Target::Override(key) => Knob::Override(key),
+            _ => return None,
+        };
+        Some(Driven { object, knob })
     }
 }
 
-/// The effect values scripts and timelines drive, each once, scripts' first.
+/// The values scripts and timelines drive, each once, scripts' first.
 pub(super) fn driven(scripts: &[Script], animations: &[Animated]) -> Vec<Driven> {
     let mut seen = std::collections::HashSet::new();
     scripts

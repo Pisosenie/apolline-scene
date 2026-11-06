@@ -14,7 +14,7 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{Context, Ctx, Function, Module, Object, Runtime, Value};
 
 use crate::Error;
-use crate::scene::{Driven, Local, Node, Object as SceneObject, Pose, Scene, Target, pose};
+use crate::scene::{Driven, Knob, Local, Node, Object as SceneObject, Pose, Scene, Target, pose};
 
 const WORLD: &str = include_str!("script/world.js");
 const MODULES: [(&str, &str); 3] = [
@@ -254,12 +254,12 @@ impl Stage {
             Target::Shown(place) | Target::Value { effect: place, .. } => {
                 slots.get(&(object, *place)).map_or(-1, |&slot| slot as i64)
             }
-            Target::Object(_) => -1,
+            Target::Object(_) | Target::Override(_) => -1,
         };
         let scripted: Vec<serde_json::Value> = scene
             .driven
             .iter()
-            .map(|value| first_value(&effects, &slots, value))
+            .map(|value| first_value(&effects, &slots, &scene.objects, value))
             .collect();
         let timelines: Vec<serde_json::Value> = scene
             .animations
@@ -310,7 +310,7 @@ impl Stage {
                 let (property, shown) = match &script.target {
                     Target::Object(property) => (*property, -1),
                     Target::Shown(_) => ("", effect),
-                    Target::Value { .. } => ("", -1),
+                    Target::Value { .. } | Target::Override(_) => ("", -1),
                 };
                 let valued = value_slot(script.object, &script.target);
                 // An effect's scripts see the effect as `thisObject`, the rest their layer.
@@ -478,18 +478,13 @@ impl Stage {
 fn first_value(
     effects: &[(usize, &crate::scene::Effect)],
     slots: &std::collections::HashMap<(usize, usize), usize>,
+    objects: &[SceneObject],
     driven: &Driven,
 ) -> serde_json::Value {
     use serde_json::Value as Json;
-    let Driven {
-        object,
-        effect,
-        pass,
-        name,
-    } = driven;
-    let given = slots
-        .get(&(*object, *effect))
-        .and_then(|&slot| {
+    let object = driven.object;
+    let given = match &driven.knob {
+        Knob::Effect { effect, pass, name } => slots.get(&(object, *effect)).and_then(|&slot| {
             effects[slot]
                 .1
                 .value
@@ -497,8 +492,13 @@ fn first_value(
                 .get(*pass)?
                 .get("constantshadervalues")?
                 .get(name)
-        })
-        .map(crate::value::plain);
+        }),
+        Knob::Override(key) => match objects.get(object) {
+            Some(SceneObject::Particles(particles)) => particles.overrides.get(*key),
+            _ => None,
+        },
+    }
+    .map(crate::value::plain);
     let numbers = |parts: Vec<f64>| {
         let count = parts.len().clamp(1, 4);
         let mut out = [0.0; 4];

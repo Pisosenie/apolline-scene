@@ -357,6 +357,13 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             let path = format!("objects[{at}].{key}");
             if key == "effects" && known.contains(&"effects") {
                 effect_scripts(value, &path, &mut note);
+            } else if key == "instanceoverride" && known.contains(&"instanceoverride") {
+                for (name, value) in value.as_object().into_iter().flatten() {
+                    let path = format!("{path}.{name}");
+                    if !(super::OVERRIDES.contains(&name.as_str()) && run(value)) {
+                        animated(value, &path, &mut note);
+                    }
+                }
             } else if value.get("animation").is_some() {
                 note(Missing::Animated(path));
             } else if nested_script(value) {
@@ -675,7 +682,7 @@ mod tests {
                 {"image": "b.json", "effects": [{"file": "e.json", "passes": [{"combos": {"A": script}}]}]},
                 {"image": "c.json", "effects": [{"file": "e.json", "passes": [{"constantshadervalues":
                     {"speed": {"script": "export function update() {}", "value": 1, "animation": {}}}}]}]},
-                {"particle": "p.json", "instanceoverride": {"rate": script}},
+                {"particle": "p.json", "instanceoverride": {"rate": script, "colorn": script}},
                 {"name": "group", "origin": script},
                 {"sound": ["a.mp3"], "volume": script}
             ]
@@ -685,7 +692,7 @@ mod tests {
             [
                 Missing::Scripted("objects[1].effects".into()),
                 Missing::Animated("objects[2].effects".into()),
-                Missing::Scripted("objects[3].instanceoverride".into()),
+                Missing::Scripted("objects[3].instanceoverride.colorn".into()),
                 Missing::Scripted("objects[5].volume".into()),
                 Missing::Scripted("general.zoom".into()),
             ]

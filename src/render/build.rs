@@ -174,7 +174,17 @@ impl<'a> Builder<'a> {
             unsafe { self.chain(renderer, scene, layer, own, size)? }
         };
         if let Some(system) = &layer.particles {
-            return unsafe { self.particles(renderer, layer, system, step) };
+            // A script that changes the count may ask for any number up to the most.
+            let counted = scene.scripts.iter().any(|script| {
+                script.object == layer.object
+                    && script.target == crate::scene::Target::Override("count")
+            });
+            let capacity = if counted {
+                crate::particles::MOST
+            } else {
+                system.max
+            };
+            return unsafe { self.particles(renderer, layer, system, step, capacity) };
         }
         let image = &layer.image;
         let base = if layer.fullscreen {
@@ -206,6 +216,7 @@ impl<'a> Builder<'a> {
         layer: &Layer,
         system: &Arc<crate::particles::System>,
         mut step: Step,
+        capacity: usize,
     ) -> Result<Drawn, Error> {
         if step.program != 0 || !layer.effects.is_empty() {
             return Err(Error::Format(
@@ -224,7 +235,7 @@ impl<'a> Builder<'a> {
                 index
             }
         };
-        reserve(&mut self.allocated, super::swarm::Swarm::bytes(system))?;
+        reserve(&mut self.allocated, super::swarm::Swarm::bytes(capacity))?;
         let seed = renderer.layers.len() as u64;
         let frames = &layer.texture.frames;
         let (width, height) = layer
@@ -232,8 +243,9 @@ impl<'a> Builder<'a> {
             .frame_size()
             .unwrap_or((layer.texture.image_width, layer.texture.image_height));
         let ratio = height as f32 / width.max(1) as f32;
-        let swarm =
-            unsafe { super::swarm::Swarm::new(self.gl, system, frames, step.uv_max, ratio, seed)? };
+        let swarm = unsafe {
+            super::swarm::Swarm::new(self.gl, system, frames, step.uv_max, ratio, seed, capacity)?
+        };
         Ok(placed(
             step,
             None,
