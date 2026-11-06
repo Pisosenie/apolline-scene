@@ -27,6 +27,8 @@ pub struct EffectPass {
     pub target: Option<Buffer>,
     /// What it reads besides its textures, by slot.
     pub reads: Vec<(u8, Source)>,
+    /// Other layers' finished pictures it reads, by slot and the layer's object id.
+    pub composites: Vec<(u8, i64)>,
 }
 
 /// One of an effect's buffers: its place among them, and how many times smaller than the
@@ -322,6 +324,11 @@ impl Project {
                         ));
                     }
                     if provides & (1 << slot) != 0 {
+                        // The editor names the layer's own picture where the pass binds the
+                        // picture before it, which is the same; the bind stands.
+                        if crate::scene::composite(&name).is_some() {
+                            continue;
+                        }
                         return Err(Error::Format(
                             "an effect binds a texture where its pass reads a buffer".into(),
                         ));
@@ -345,6 +352,17 @@ impl Project {
                 "animated effect values need another renderer".into(),
             ));
         }
+        // Another layer's finished picture is drawn, not read from a file.
+        let mut composites = Vec::new();
+        for (slot, name) in textures.iter_mut().enumerate() {
+            if let Some(id) = name.as_deref().and_then(crate::scene::composite) {
+                composites.push((slot as u8, id));
+                *name = None;
+            }
+        }
+        let provides = composites
+            .iter()
+            .fold(provides, |mask, (slot, _)| mask | 1 << slot);
         let fragment = self.custom(
             shader,
             &combos,
@@ -370,6 +388,7 @@ impl Project {
             visible: true,
             target: None,
             reads: Vec::new(),
+            composites,
         })
     }
 }

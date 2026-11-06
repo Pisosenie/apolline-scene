@@ -19,6 +19,7 @@ demos.add_argument("--animation-demo", action="store_true", help="the effect dem
 demos.add_argument("--sprite-demo", action="store_true", help="make the sun a sprite sheet of junk, the sun turned in the sheet and the sun, which shows from 1 s")
 demos.add_argument("--pointer-demo", action="store_true", help="an effect on the turned sun that finds where the pointer, at rest mid-screen, is on the sun's picture, and turns it red unless that's where it is")
 demos.add_argument("--buffer-demo", action="store_true", help="an effect on the sun that copies it into a half-size buffer and checks the copy against the sun, turning it red where they differ")
+demos.add_argument("--composite-demo", action="store_true", help="a hidden copy of the sun whose finished picture an effect on the sun reads and checks against its own, turning it red where they differ")
 demos.add_argument("--values-demo", action="store_true", help="draw the glow green and the brick blue through one material with different values")
 demos.add_argument("--particle-demo", action="store_true", help="add rising embers, already two seconds in")
 demos.add_argument("--script-demo", action="store_true", help="misplace and hide the brick and dim the glow wrongly, and let scripts put them back")
@@ -312,6 +313,26 @@ void main() {
     vec4 copy = texSample2D(g_Texture0, v_TexCoord);
     vec4 sun = texSample2D(g_Texture2, v_TexCoord);
     gl_FragColor = distance(copy, sun) < 0.25 ? sun : vec4(1.0, 0.0, 0.0, 1.0);
+}
+"""
+if args.composite_demo:
+    # The hidden copy is drawn for the effect alone; the effect keeps the sun only where the
+    # copy's picture is the sun's.
+    scene = json.loads(files["scene.json"])
+    copy = {"id": 9, "name": "source", "image": "models/sun.json", "origin": "100 100 0", "size": "50 50", "visible": False}
+    scene["objects"].append(copy)
+    scene["objects"][1]["effects"] = [{"file": "effects/same/effect.json",
+                                       "passes": [{"textures": [None, "_rt_imageLayerComposite_9_a"]}]}]
+    files["scene.json"] = json.dumps(scene).encode()
+    files["effects/same/effect.json"] = b'{"name": "same", "passes": [{"material": "materials/effects/same.json"}]}'
+    files["materials/effects/same.json"] = b'{"passes": [{"shader": "effects/same", "textures": [null]}]}'
+    files["shaders/effects/same.frag"] = b"""varying vec2 v_TexCoord;
+uniform sampler2D g_Texture0;
+uniform sampler2D g_Texture1;
+void main() {
+    vec4 own = texSample2D(g_Texture0, v_TexCoord);
+    vec4 copy = texSample2D(g_Texture1, v_TexCoord);
+    gl_FragColor = distance(own, copy) < 0.05 ? own : vec4(1.0, 0.0, 0.0, 1.0);
 }
 """
 if args.values_demo:

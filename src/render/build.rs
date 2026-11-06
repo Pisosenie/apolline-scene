@@ -54,6 +54,8 @@ pub(super) struct Builder<'a> {
     variants: HashMap<(Option<&'a str>, &'a str), usize>,
     /// Our particle program, once a layer needs it.
     particles: Option<usize>,
+    /// The objects whose finished pictures other layers' effects read.
+    pub composited: std::collections::BTreeSet<usize>,
     source_bytes: usize,
     pub allocated: usize,
 }
@@ -66,6 +68,7 @@ impl<'a> Builder<'a> {
             sheets: HashMap::new(),
             variants: HashMap::new(),
             particles: None,
+            composited: std::collections::BTreeSet::new(),
             source_bytes: 0,
             allocated: 0,
         }
@@ -150,14 +153,16 @@ impl<'a> Builder<'a> {
             inputs,
             constants,
         };
-        let (step, chain) = if layer.effects.is_empty() {
+        // A layer whose picture others' effects read is drawn into a target of its own too.
+        let (step, chain) = if layer.effects.is_empty() && !self.composited.contains(&layer.object)
+        {
             (own, None)
         } else {
             let size = (
                 picture.0.clamp(1, TARGET_SIDE),
                 picture.1.clamp(1, TARGET_SIDE),
             );
-            unsafe { self.chain(renderer, layer, own, size)? }
+            unsafe { self.chain(renderer, scene, layer, own, size)? }
         };
         if let Some(system) = &layer.particles {
             return unsafe { self.particles(renderer, layer, system, step) };
@@ -229,6 +234,7 @@ impl<'a> Builder<'a> {
     unsafe fn chain(
         &mut self,
         renderer: &mut Renderer,
+        scene: &Scene,
         layer: &'a Layer,
         own: Step,
         size: (u32, u32),
@@ -250,7 +256,9 @@ impl<'a> Builder<'a> {
             let provided = pass
                 .reads
                 .iter()
-                .fold(0u8, |mask, (slot, _)| mask | 1 << slot);
+                .map(|(slot, _)| *slot)
+                .chain(pass.composites.iter().map(|(slot, _)| *slot))
+                .fold(0u8, |mask, slot| mask | 1 << slot);
             let mut bindings = provided | 1;
             let mut inputs = Vec::with_capacity(pass.inputs.len());
             for input in &pass.inputs {
@@ -280,6 +288,12 @@ impl<'a> Builder<'a> {
                     }
                 })
                 .collect();
+            // A picture of a layer that isn't there leaves its slot unbound.
+            let composites = pass
+                .composites
+                .iter()
+                .filter_map(|&(slot, id)| Some((slot, *scene.ids.get(&id)?)))
+                .collect();
             passes.push(Pass {
                 effect: pass.effect,
                 pass: pass.pass,
@@ -287,18 +301,22 @@ impl<'a> Builder<'a> {
                 keys: pass.fragment.keys.clone(),
                 target: pass.target.map(|wanted| buffer(pass.effect, wanted)),
                 reads,
+                composites,
             });
         }
-        // Effects that read where the layer is on screen draw again as it moves.
-        let animated = steps.iter().any(|step| {
-            let program = &renderer.programs[step.program];
-            program
-                .frame
-                .as_ref()
-                .is_some_and(material::Frame::animated)
-                || program.unproject.is_some()
-                || program.unproject_picture.is_some()
-        });
+        // Effects that read where the layer is on screen draw again as it moves, and those
+        // that read other layers' pictures as those change.
+        let reads_others = passes.iter().any(|pass| !pass.composites.is_empty());
+        let animated = reads_others
+            || steps.iter().any(|step| {
+                let program = &renderer.programs[step.program];
+                program
+                    .frame
+                    .as_ref()
+                    .is_some_and(material::Frame::animated)
+                    || program.unproject.is_some()
+                    || program.unproject_picture.is_some()
+            });
         let scales: Vec<u32> = buffers.iter().map(|&(_, _, scale)| scale).collect();
         let pixels = |(width, height): (u32, u32)| 4 * width as usize * height as usize;
         let bytes = 2 * pixels(size)

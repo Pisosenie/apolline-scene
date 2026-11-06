@@ -38,7 +38,12 @@ pub(super) struct Pass {
     pub target: Option<usize>,
     /// What it reads, by slot: a buffer, or none for the picture before it.
     pub reads: Vec<(u8, Option<usize>)>,
+    /// Other layers' finished pictures it reads, by slot and the layer's object.
+    pub composites: Vec<(u8, usize)>,
 }
+
+/// Layers' finished pictures, by object, which other layers' effects read.
+pub(super) type Pictures = [(usize, glow::Texture, (u32, u32))];
 
 /// What a run of the chain is drawn for: the screen, the time, and where the layer is on the
 /// screen, which effects that follow the pointer read.
@@ -109,6 +114,11 @@ impl Chain {
     /// The layer's own step, which reads its picture.
     pub fn own(&mut self) -> &mut Step {
         &mut self.steps[0]
+    }
+
+    /// The size it draws its picture at.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
     }
 
     /// Draws at a new size from here on, into the same textures.
@@ -186,6 +196,7 @@ impl Chain {
         programs: &[Program],
         at: Moment,
         inputs: &super::material::Inputs,
+        pictures: &Pictures,
     ) {
         let Moment {
             screen,
@@ -226,6 +237,18 @@ impl Chain {
                 if let Some(frame) = &program.frame {
                     frame.update(gl, screen, size, time, delta, inputs);
                 }
+                let others = pass
+                    .into_iter()
+                    .flat_map(|pass| &pass.composites)
+                    .filter_map(|&(slot, object)| {
+                        let &(_, texture, size) =
+                            pictures.iter().find(|(owner, ..)| *owner == object)?;
+                        Some(Input {
+                            slot,
+                            texture,
+                            resolution: resolution(size),
+                        })
+                    });
                 let reads: Vec<Input> = pass
                     .into_iter()
                     .flat_map(|pass| &pass.reads)
@@ -244,6 +267,7 @@ impl Chain {
                             resolution: resolution(self.size),
                         },
                     })
+                    .chain(others)
                     .collect();
                 // A pass into a buffer gets its quad already in place, flipped like the rest, so
                 // its matrix comes out the identity; one into the picture, in its pixels.

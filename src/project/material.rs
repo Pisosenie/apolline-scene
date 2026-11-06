@@ -366,7 +366,10 @@ pub(super) fn names(value: Option<&Value>) -> Result<Vec<Option<String>>, Error>
             Value::Null => Ok(None),
             Value::String(name) if name.is_empty() => Ok(None),
             Value::String(name) => {
-                texture_file(name)?;
+                // Another layer's finished picture is a name the effect resolves, not a file.
+                if crate::scene::composite(name).is_none() {
+                    texture_file(name)?;
+                }
                 Ok(Some(name.clone()))
             }
             _ => Err(Error::Format(

@@ -37,6 +37,8 @@ pub struct Scene {
     pub(crate) tree: Vec<Node>,
     /// Every object's name, drawn or not, which scripts find layers by.
     pub(crate) names: Vec<String>,
+    /// Which object each id is, which effects that read another layer's picture name it by.
+    pub(crate) ids: std::collections::HashMap<i64, usize>,
     /// What in it isn't understood: keys, settings and changing values, read once.
     refused: Vec<Missing>,
 }
@@ -288,6 +290,11 @@ impl Scene {
                 .iter()
                 .map(|value| text(value.get("name")).unwrap_or_default().to_owned())
                 .collect(),
+            ids: raw
+                .iter()
+                .enumerate()
+                .filter_map(|(at, value)| Some((value.get("id")?.as_i64()?, at)))
+                .collect(),
             refused: {
                 let mut refused = check::refusals(root);
                 if crowded {
@@ -324,6 +331,35 @@ impl Scene {
         {
             found.undrawn = Some(why.chars().take(300).collect());
         }
+    }
+
+    /// The objects whose finished pictures layers' effects read, by `_rt_imageLayerComposite_`.
+    pub(crate) fn composited(&self) -> std::collections::BTreeSet<usize> {
+        self.objects
+            .iter()
+            .flat_map(|object| match object {
+                Object::Image(image) | Object::Text(Text { layer: image, .. }) => {
+                    &image.effects[..]
+                }
+                _ => &[],
+            })
+            .flat_map(|effect| {
+                effect
+                    .value
+                    .get("passes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .flat_map(|pass| {
+                pass.get("textures")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|name| composite(name.as_str()?))
+            .filter_map(|id| self.ids.get(&id).copied())
+            .collect()
     }
 
     pub fn images(&self) -> impl Iterator<Item = &Image> {
@@ -622,6 +658,15 @@ fn scripts(raw: &[Value], objects: &[Object]) -> Vec<Script> {
         found.extend(effects::scripts(at, objects));
     }
     found
+}
+
+/// The object id `_rt_imageLayerComposite_17_a` names: another layer's finished picture, its
+/// effects and all.
+pub(crate) fn composite(name: &str) -> Option<i64> {
+    let rest = name.strip_prefix("_rt_imageLayerComposite_")?;
+    let (id, side) = rest.rsplit_once('_')?;
+    matches!(side, "a" | "b").then_some(())?;
+    id.parse().ok()
 }
 
 /// `topleft` and the rest as the point on the layer they name.

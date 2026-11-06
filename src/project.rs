@@ -387,13 +387,15 @@ impl Project {
         {
             crate::text::warm();
         }
+        // Hidden layers whose pictures others' effects read are drawn for them.
+        let composited = scene.composited();
         let shown: Vec<(usize, &Object)> = scene
             .objects
             .iter()
             .enumerate()
-            .filter(|(_, object)| match object {
-                Object::Image(image) => image.visible || scripted,
-                Object::Text(text) => text.layer.visible || scripted,
+            .filter(|(at, object)| match object {
+                Object::Image(image) => image.visible || scripted || composited.contains(at),
+                Object::Text(text) => text.layer.visible || scripted || composited.contains(at),
                 Object::Particles(particles) => particles.visible || scripted,
                 _ => false,
             })

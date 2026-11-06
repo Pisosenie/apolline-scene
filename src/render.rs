@@ -208,6 +208,8 @@ pub struct Renderer {
     stage: Option<Box<Stage>>,
     /// Where the scripts' say over effects lands.
     wiring: scripted::Wiring,
+    /// The objects whose finished pictures other layers' effects read.
+    composited: std::collections::BTreeSet<usize>,
     /// The size of the last target drawn to, which scripts see as the screen.
     screen: std::cell::Cell<(u32, u32)>,
 }
@@ -241,9 +243,12 @@ impl Renderer {
             inputs: Box::default(),
             stage: None,
             wiring: scripted::Wiring::default(),
+            composited: std::collections::BTreeSet::new(),
             screen: std::cell::Cell::new((scene.size.0 as u32, scene.size.1 as u32)),
         };
         let mut builder = build::Builder::new(gl);
+        builder.composited = scene.composited();
+        renderer.composited = builder.composited.clone();
         // Making effect targets binds framebuffers; the host gets its own back.
         let host = unsafe { state::Host::save(gl) };
         let prepared = (|| {
@@ -432,8 +437,17 @@ impl Renderer {
             gl.disable(glow::STENCIL_TEST);
             gl.color_mask(true, true, true, true);
             gl.blend_equation(glow::FUNC_ADD);
-            for layer in self.layers.iter().filter(|layer| layer.visible) {
-                if let Some(chain) = &layer.chain {
+            // Layers whose pictures others read go first, shown or not, so theirs are ready.
+            let mut pictures: Vec<(usize, glow::Texture, (u32, u32))> = Vec::new();
+            for read in [true, false] {
+                for layer in &self.layers {
+                    let wanted = self.composited.contains(&layer.object);
+                    let Some(chain) = layer.chain.as_ref().filter(|_| wanted == read) else {
+                        continue;
+                    };
+                    if !layer.visible && !wanted {
+                        continue;
+                    }
                     let (placed, _) = self.placed(layer, shift, target, fit);
                     let at = chain::Moment {
                         screen: target,
@@ -441,7 +455,10 @@ impl Renderer {
                         delta,
                         placed,
                     };
-                    chain.run(gl, &self.programs, at, &self.inputs);
+                    chain.run(gl, &self.programs, at, &self.inputs, &pictures);
+                    if wanted {
+                        pictures.push((layer.object, chain.result(), chain.size()));
+                    }
                 }
             }
             host.bind(gl);
