@@ -10,6 +10,9 @@ use crate::Error;
 pub(crate) const JSON_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const RESOURCE_BYTES: usize = 256 * 1024 * 1024;
 pub(crate) const PACKAGE_BYTES: usize = 512 * 1024 * 1024;
+/// The most a scene's distinct decoded textures may take together, frames and mipmaps
+/// included: as much as the renderer's GPU budget.
+pub(crate) const DECODED_BYTES: usize = 1024 * 1024 * 1024;
 
 pub(crate) fn read(path: &Path, limit: usize) -> Result<Vec<u8>, Error> {
     let fail = |err| Error::Io(path.display().to_string(), err);

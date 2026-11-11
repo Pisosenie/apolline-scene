@@ -65,3 +65,12 @@ Run these first on `main`, then on the branch, and compare.
    This alone refused 2998757800 and 3233141951. Check: both prepare (`survey` counts two more
    than `main`), and their particles fade, thin out or speed up over time the way the Workshop
    previews show.
+8. **Decoded textures may take 1 GiB, not 512 MiB.** This is the same as the GPU budget, so a
+   scene can't be refused for its decoded textures and then fit on the GPU anyway. It blocked
+   the Lain scene 2594686226 and 2388299037, though 2388299037 also needs user textures.
+   - **Check:**
+     1. 2594686226 prepares, or is now refused only by the GPU budget: "scene GPU texture
+        allocations exceed 1 GiB" at `Renderer::new`.
+     2. If it draws, it matches its preview.
+     3. While it loads, the daemon's memory goes up by up to about 1 GiB and comes back down
+        once it shows.

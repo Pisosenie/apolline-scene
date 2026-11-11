@@ -43,7 +43,7 @@ On the larger 81-scene set it was developed against on macOS, 55 prepare nativel
 | Particles: emitters, initializers, operators, turbulence, control points, children (`eventfollow`, `eventspawn`, `eventdeath`), rope trails, systems tilted out of the plane | Sound: the library takes a spectrum; apolline-wall's feed of it is new and unchecked |
 | Puppet warp (`.mdl`), partly: each file's first animation only, version 23 skeletons refused | `thisScene.createLayer` and scripts on text `pointsize` or particle `colorn` |
 | SceneScript on objects, effects and particle overrides | User textures on effects (album art and the like) |
-| Timeline animations on objects, effect values and particle overrides | The decoded-texture budget: 512 MiB on the CPU side |
+| Timeline animations on objects, effect values and particle overrides | Scenes whose decoded textures pass 1 GiB |
 | Text layers in the project's font or a system font | Opaque text backgrounds and letter spacing |
 | User properties: bool, slider, colour, combo and text | 3D scenes, lights and models (not planned) |
 

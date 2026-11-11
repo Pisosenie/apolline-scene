@@ -325,7 +325,7 @@ impl Project {
             let named: Vec<String> = missing.iter().map(ToString::to_string).collect();
             return Err(Error::Format(format!("needs {}", named.join(", "))));
         }
-        let (layers, skipped) = self.prepare_layers(&scene, 512 * 1024 * 1024, true);
+        let (layers, skipped) = self.prepare_layers(&scene, crate::files::DECODED_BYTES, true);
         if !skipped.is_empty() {
             return Err(Error::Format(skipped.join("; ")));
         }
@@ -372,7 +372,7 @@ impl Project {
     /// The scene's image layers, each with its texture. A layer whose files are missing or
     /// broken is left out and named in the second list, so the rest still draws.
     pub fn layers(&self, scene: &Scene) -> (Vec<Layer>, Vec<String>) {
-        self.layers_with_budget(scene, 512 * 1024 * 1024)
+        self.layers_with_budget(scene, crate::files::DECODED_BYTES)
     }
 
     fn layers_with_budget(&self, scene: &Scene, remaining: usize) -> (Vec<Layer>, Vec<String>) {

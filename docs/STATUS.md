@@ -93,8 +93,9 @@ check that those two now prepare.
    - `depthparallax` (3118949804);
    - scripts on text `pointsize` and particle `colorn` (2938612768);
    - user textures on effects (2370927443, 2388299037);
-   - the decoded-texture budget (512 MiB on the CPU side, a separate budget from the GPU one;
-     it blocks the Lain scene 2594686226 and 2388299037). Raising it is Danil's call.
+   - the decoded-texture budget, raised from 512 MiB to 1 GiB on `fix/review-findings`. It
+     blocked the Lain scene 2594686226 and 2388299037; check whether they now prepare and also
+     fit the 1 GiB GPU budget, which their textures, decoded to RGBA, count against too.
 
 ## Tools
 

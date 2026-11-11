@@ -13,10 +13,12 @@ Hidden layers load no resources. Decoded textures are limited to 256 MiB across 
 mipmaps, with dimensions checked before decompression. GPU resources are released when
 construction fails; the host still calls `Renderer::delete` before destroying its GL context.
 
-A scene may retain at most 512 MiB of distinct decoded textures and 4096 image layers.
+A scene may retain at most 1 GiB of distinct decoded textures and 4096 image layers.
 Shared textures count once. Packages are capped at 512 MiB, individual resources at 256 MiB
 and JSON files at 8 MiB. Readers reject non-regular files and bound reads even if a file grows.
-These are separate allocation limits, not a guarantee that total process RSS stays below 512 MiB.
+These are separate allocation limits, not a guarantee that total process RSS stays below any of
+them. Decoded textures are held only while a scene is prepared and uploaded; a host that drops
+the prepared scene afterwards gets that memory back.
 
 ## Scripts
 

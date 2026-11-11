@@ -100,7 +100,8 @@ rest, by scenes:
   above 1. One scene's preview matches it unzoomed, so which way it goes is a guess from a
   scene that animates it from 3 down to 1 as an opening; animated zooms aren't
   played yet.
-- Big scenes over the 512 MiB texture budget, since DXT textures are decoded to RGBA.
+- Big scenes over the texture budget (raised from 512 MiB to 1 GiB), since DXT textures are
+  decoded to RGBA.
 
 Guesses it confirmed: pictures carry the clamp flag; particle key names; `VERSION` being the
 only combo on most plain image materials; a random colour (`colorrandom`) picked at one point
