@@ -692,8 +692,27 @@ fn animations(raw: &[Value], objects: &[Object]) -> Vec<Animated> {
             }
         }
         found.extend(effects::animations(at, objects));
+        if matches!(object, Object::Particles(_)) {
+            found.extend(override_animations(at, value));
+        }
     }
     found
+}
+
+/// The timelines on a particle system's instance overrides.
+fn override_animations(object: usize, value: &Value) -> Vec<Animated> {
+    let overrides = value.get("instanceoverride").and_then(Value::as_object);
+    OVERRIDES
+        .iter()
+        .filter_map(|&key| {
+            let animation = overrides?.get(key)?.get("animation")?;
+            Some(Animated {
+                object,
+                target: Target::Override(key),
+                timeline: Timeline::parse(animation).ok()?,
+            })
+        })
+        .collect()
 }
 
 /// The scripts on drawn objects' values and on their effects. Scripts anywhere else are

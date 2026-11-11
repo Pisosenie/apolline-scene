@@ -88,6 +88,14 @@ fn an_instance_scales_its_system_and_unknown_overrides_are_refused() {
     std::fs::write(folder.join("scene.json"), &scripted).unwrap();
     let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
     assert_eq!(prepared.layers[1].particles.as_ref().unwrap().max, 20);
+    // So does one a timeline plays, which the check lets through.
+    let animated = scene.replace(
+        r#""count":0.5"#,
+        r#""count":{"value":0.5,"animation":{"c0":[{"frame":0,"value":0.5},{"frame":30,"value":1}],"options":{"fps":30,"length":30}}}"#,
+    );
+    std::fs::write(folder.join("scene.json"), &animated).unwrap();
+    let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();
+    assert_eq!(prepared.layers[1].particles.as_ref().unwrap().max, 20);
     let bytes = scene.replace(r#""colorn":"1 0 0""#, r#""color":"255 51 0""#);
     std::fs::write(folder.join("scene.json"), &bytes).unwrap();
     let prepared = Project::open(&folder, None).unwrap().prepare().unwrap();

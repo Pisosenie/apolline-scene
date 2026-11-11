@@ -199,11 +199,19 @@ impl<'a> Builder<'a> {
             None => None,
         };
         if let Some(system) = &layer.particles {
-            // A script that changes the count may ask for any number up to the most.
-            let counted = scene.scripts.iter().any(|script| {
-                script.object == layer.object
-                    && script.target == crate::scene::Target::Override("count")
-            });
+            // A script or timeline that changes the count may ask for any number up to the most.
+            let count = crate::scene::Target::Override("count");
+            let counted = scene
+                .scripts
+                .iter()
+                .map(|script| (script.object, &script.target))
+                .chain(
+                    scene
+                        .animations
+                        .iter()
+                        .map(|animated| (animated.object, &animated.target)),
+                )
+                .any(|(object, target)| object == layer.object && *target == count);
             let capacity = if counted {
                 crate::particles::MOST
             } else {

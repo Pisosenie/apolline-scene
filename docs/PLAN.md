@@ -233,7 +233,8 @@ spacing and block alignment are refused; `anchor` (keeping a layer by a screen e
 screens shaped unlike the scene) is ignored.
 
 **E. Timeline animations**, done: an `animation` on an object's `origin`, `scale`, `angles`,
-`color`, `alpha` or `brightness`, or on an effect's value, plays each frame before the scripts
+`color`, `alpha` or `brightness`, on an effect's value, or on a particle system's instance
+override (`alpha`, `count`, `lifetime`, `rate`, `size`, `speed`, one channel each), plays each frame before the scripts
 run, so a script on the same value gets what the timeline gives. Each component has its own
 keys; between two keys the value follows a cubic with the slopes the key handles give: flat
 for the editor's default handles (easing in and out), through the neighbouring keys for
@@ -244,8 +245,9 @@ could be checked against Wallpaper Engine. Timelines loop, play once and hold, o
 loop with `wraploop` runs from its last key back to its first; `relative` adds to the value;
 `startpaused` waits at frame 0. `getAnimation(name)` on a layer or effect plays, pauses, stops
 and sets frames. Animation events (`events`) aren't sent, and `parent`/`children` links don't
-tie playback together beyond all starting at once. Timelines on visibility, text, particle
-overrides and the camera, turns out of the scene's plane, an effect material's own values and
+tie playback together beyond all starting at once. An animated override, like a scripted one,
+scales the system from where its file leaves it, not from its saved value. Timelines on
+visibility, text, an override's colour and the camera, turns out of the scene's plane, an effect material's own values and
 more than 4096 in a scene are still refused.
 
 **G. puppet warp**: once its storage is known from real files. 3D scenes, lights and models

@@ -368,7 +368,8 @@ pub(super) fn refusals(root: &Value) -> Vec<Missing> {
             } else if key == "instanceoverride" && known.contains(&"instanceoverride") {
                 for (name, value) in value.as_object().into_iter().flatten() {
                     let path = format!("{path}.{name}");
-                    if !(super::OVERRIDES.contains(&name.as_str()) && run(value)) {
+                    let plays_one = plays(value, true) && fits_width(value, 1);
+                    if !(super::OVERRIDES.contains(&name.as_str()) && (run(value) || plays_one)) {
                         animated(value, &path, &mut note);
                     }
                 }
@@ -551,6 +552,11 @@ fn fits(key: &str, value: &Value) -> bool {
     } else {
         3
     };
+    fits_width(value, width)
+}
+
+/// Whether a timeline only has keys for the first `width` components.
+fn fits_width(value: &Value, width: usize) -> bool {
     value
         .get("animation")
         .and_then(Value::as_object)

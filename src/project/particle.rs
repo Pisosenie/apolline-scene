@@ -256,11 +256,11 @@ fn overridden(
     overrides: &serde_json::Map<String, Value>,
 ) -> Result<System, Error> {
     for (key, value) in overrides {
-        // Scripted ones scale the system as it runs, from where its file leaves it; the older
-        // byte colour gives way to the newer one.
-        let scripted = value.get("script").is_some();
+        // Scripted and animated ones scale the system as it runs, from where its file leaves
+        // it; the older byte colour gives way to the newer one.
+        let driven = value.get("script").is_some() || value.get("animation").is_some();
         let older = key == "color" && overrides.contains_key("colorn");
-        if key == "id" || scripted || older || !system.overridable(key) {
+        if key == "id" || driven || older || !system.overridable(key) {
             continue;
         }
         let factor = || {

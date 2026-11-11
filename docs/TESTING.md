@@ -1,11 +1,12 @@
 # Testing the review fixes
 
-Branch `fix/review-findings`, commit `253cbf1`, on top of v0.1.0 (`6a53ddb`). It stays off
+Branch `fix/review-findings`, on top of v0.1.0 (`6a53ddb`): the review fixes (`253cbf1`), then
+timelines on particle instance overrides. It stays off
 `main` until it has run on the Linux machine. apolline-wall's branch of the same name pins this
 commit; its [docs/TESTING.md](https://github.com/Pisosenie/apolline-wall/blob/fix/review-findings/docs/TESTING.md)
 covers the daemon.
 
-Checked so far: `cargo test` (190 tests) and `cargo clippy --all-targets` pass on the Mac, and
+Checked so far: `cargo test` (191 tests) and `cargo clippy --all-targets` pass on the Mac, and
 apolline-wall's Linux clippy builds against this branch. Nothing here has drawn on a real GPU.
 
 ## Set up
@@ -59,3 +60,8 @@ Run these first on `main`, then on the branch, and compare.
    drew on `main` still prepares. If one is now refused with "a puppet skeleton version", see
    which version it has with `python3 -I tools/pkg.py scene.pkg <model>.mdl | grep -ao 'MDLS[0-9]*'`
    and tell me.
+7. **Timelines on particle instance overrides.** An `animation` on `instanceoverride.alpha`,
+   `count`, `lifetime`, `rate`, `size` or `speed` now plays, the way a script on one already did.
+   This alone refused 2998757800 and 3233141951. Check: both prepare (`survey` counts two more
+   than `main`), and their particles fade, thin out or speed up over time the way the Workshop
+   previews show.

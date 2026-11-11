@@ -463,3 +463,24 @@ fn a_script_on_the_bloom_starts_from_its_strength_and_has_no_layer() {
     stage.tick(at(2.0));
     assert_eq!(stage.effects().1[0][0], 3.0);
 }
+
+#[test]
+fn a_timeline_on_a_particle_override_plays_into_its_value() {
+    let line = keys(&[(0.0, 0.0), (10.0, 1.0)], false);
+    let scene = scene(&format!(
+        r#"[{{"particle": "p.json", "instanceoverride": {{"id": 1, "alpha": {{"value": 0,
+            "animation": {{"c0": {line}, "options": {{"fps": 10, "length": 10, "mode": "single"}}}}}}}}}}]"#
+    ));
+    assert!(scene.missing().is_empty(), "{:?}", scene.missing());
+    assert_eq!(
+        scene.animations[0].target,
+        crate::scene::Target::Override("alpha")
+    );
+    let mut stage = stage(&scene);
+    stage.tick(after(0.5));
+    assert!(
+        (stage.effects().1[0][0] - 0.5).abs() < 1e-4,
+        "{:?}",
+        stage.effects().1
+    );
+}

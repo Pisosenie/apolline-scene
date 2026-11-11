@@ -68,28 +68,26 @@ two monitors (2560×1440 at 165 Hz, 1920×1080 at 100 Hz turned 270°). The Work
 
 ## What to take next
 
-Cheapest first. The scene IDs are folders under `~/we/steamapps/workshop/content/431960`.
+Cheapest first. The scene IDs are Workshop item folders. Timelines on particle instance
+overrides, which alone blocked 2998757800 and 3233141951, are done on `fix/review-findings`;
+check that those two now prepare.
 
-1. **Timelines on particle instance overrides** (`instanceoverride.alpha` with an `animation`).
-   This is the only thing blocking 2998757800 and 3233141951. Scripts on overrides already work
-   through `Target::Override`; timelines need the same target in `scene::animations` and the
-   check.
-2. **HDR bloom** (`general.hdr` with `bloom`). It is the only thing blocking 2468489223 and
+1. **HDR bloom** (`general.hdr` with `bloom`). It is the only thing blocking 2468489223 and
    2784674898, and part of what blocks 2902406982 and 3299228616. Its settings are
    `bloomhdrstrength`, `bloomhdrthreshold`, `bloomhdrscatter`, `bloomhdrfeather` and
    `bloomhdriterations`; it looks like a chain of halving pictures. No stock material
    describes it, so work it out from the editor and the previews.
-3. **Perspective layers** (`perspective: true` on an image). It is the only thing blocking
+2. **Perspective layers** (`perspective: true` on an image). It is the only thing blocking
    2983846453, and part of what blocks 3113287126 and 3521337568.
-4. **Particle materials with refraction** (`REFRACT` in `genericparticle`). They need a copy of
+3. **Particle materials with refraction** (`REFRACT` in `genericparticle`). They need a copy of
    the frame under the particles, which the bloom and blend-mode code already make
    (`compose::Frame`). Part of what blocks 2964778792, 2981249186, 1444077782 and 2370927443.
-5. **Sprite renderer `flags` and `axis`**: the meaning isn't known. Part of what blocks
+4. **Sprite renderer `flags` and `axis`**: the meaning isn't known. Part of what blocks
    2964778792 and 1444077782.
-6. **`vortex`** (2419444134). Its defaults aren't documented anywhere reachable
+5. **`vortex`** (2419444134). Its defaults aren't documented anywhere reachable
    (docs.wallpaperengine.io is a single-page app that doesn't fetch), so don't guess.
-7. **`thisScene.createLayer`** (3290320699): a script that makes layers at run time.
-8. **The rest**, each its own project:
+6. **`thisScene.createLayer`** (3290320699): a script that makes layers at run time.
+7. **The rest**, each its own project:
    - video textures (`.tex` with an MP4 inside, 3122339805);
    - 3D cameras and 3D layer rotation (3292361861, 3509243656, 3521337568);
    - `depthparallax` (3118949804);
