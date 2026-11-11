@@ -4,23 +4,26 @@
 use std::sync::Arc;
 
 use super::{Base, Drawn, reserve, upload::fill};
+use crate::tex::Texture;
 use crate::text::Lettering;
 
 pub(super) struct Words {
     pub lettering: Arc<Lettering>,
-    /// The words drawn last; none while they're still the ones the layer was prepared with.
+    /// The words tried last, which aren't tried again until they change.
     pub shown: Option<String>,
+    /// The words in the texture now; none while they're the ones the layer was prepared with.
+    pub drawn: Option<String>,
+    /// The picture of the words the layer was prepared with.
+    pub prepared: Arc<Texture>,
     /// The texture they're drawn into, which the layer's own step reads.
     pub texture: glow::Texture,
-    /// What it and the layer's effect targets take, counted in the renderer's budget.
+    /// What the texture takes, counted in the renderer's budget.
     pub bytes: usize,
 }
 
-/// What words of this size take: their texture with its mipmaps, and two effect targets.
-pub(super) fn bytes(texture: &crate::tex::Texture, chained: bool) -> usize {
-    let mips: usize = texture.images[0].iter().map(|mip| mip.pixels.len()).sum();
-    let targets = 2 * 4 * texture.width as usize * texture.height as usize;
-    mips + if chained { targets } else { 0 }
+/// What a picture of words takes: its texture with its mipmaps.
+pub(super) fn bytes(texture: &Texture) -> usize {
+    texture.images[0].iter().map(|mip| mip.pixels.len()).sum()
 }
 
 impl Drawn {
@@ -40,16 +43,27 @@ impl Drawn {
         // tried again until they change.
         words.shown = Some(text.to_owned());
         let raster = words.lettering.raster(text);
-        let bytes = bytes(&raster.texture, self.chain.is_some());
-        let mut total = allocated.saturating_sub(words.bytes);
-        if reserve(&mut total, bytes).is_err()
-            || unsafe { fill(gl, words.texture, &raster.texture) }.is_err()
-        {
+        let (width, height) = (raster.texture.width, raster.texture.height);
+        let (was, will) = self.chain.as_ref().map_or((0, 0), |chain| {
+            (chain.bytes(chain.size()), chain.bytes((width, height)))
+        });
+        let bytes = bytes(&raster.texture);
+        let mut total = allocated.saturating_sub(words.bytes + was);
+        if reserve(&mut total, bytes + will).is_err() {
+            return;
+        }
+        if unsafe { fill(gl, words.texture, &raster.texture) }.is_err() {
+            // GL may have taken some of its levels; the old words go back in whole.
+            let old = match &words.drawn {
+                Some(drawn) => &words.lettering.raster(drawn).texture,
+                None => &*words.prepared,
+            };
+            let _ = unsafe { fill(gl, words.texture, old) };
             return;
         }
         *allocated = total;
         words.bytes = bytes;
-        let (width, height) = (raster.texture.width, raster.texture.height);
+        words.drawn = Some(text.to_owned());
         let whole = [width as f32, height as f32, width as f32, height as f32];
         let own = match self.chain.as_mut() {
             Some(chain) => {

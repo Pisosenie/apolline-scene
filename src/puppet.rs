@@ -167,7 +167,10 @@ impl Puppet {
 }
 
 fn skeleton(read: &mut Reader) -> Result<Vec<Bone>, Error> {
-    read.version(b"MDLS")?;
+    // Version 4 lays its bones out another way, not yet worked out.
+    if !(1..=3).contains(&read.version(b"MDLS")?) {
+        return Err(refuse("a puppet skeleton version"));
+    }
     // Where the skeleton ends: past its bones, older ones keep what the editor draws them with.
     let end = read.u32()? as usize;
     let count = read.u32()? as usize;

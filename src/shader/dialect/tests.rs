@@ -62,3 +62,9 @@ fn combos_macros_unsigned_and_true_or_false_are_numbers_too() {
     assert!(out.contains("float g = f * SCALE;"), "{out}");
     assert!(out.contains("f *= float(on);"), "{out}");
 }
+
+#[test]
+fn hex_numbers_are_whole_even_with_an_f_in_them() {
+    let source = "void main() {\n int n = 3;\n if (n == 0x1F) { n = 0xAF; }\n uint m = 0xFFu;\n}";
+    assert_eq!(converted(source), source);
+}

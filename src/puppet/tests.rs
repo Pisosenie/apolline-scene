@@ -131,3 +131,11 @@ fn corners_move_with_the_bones_they_hang_from() {
     );
     assert!(near(slow[2], [200.0, 0.0]) || slow[2][1] < 1.0);
 }
+
+#[test]
+fn a_skeleton_of_a_version_not_worked_out_is_refused() {
+    let mut bytes = arm();
+    let at = bytes.windows(8).position(|w| w == b"MDLS0002").unwrap();
+    bytes[at + 7] = b'4';
+    assert!(Puppet::parse(&bytes).is_err());
+}

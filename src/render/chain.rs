@@ -127,6 +127,11 @@ impl Chain {
         self.size
     }
 
+    /// What its targets and buffers take at `size`.
+    pub fn bytes(&self, size: (u32, u32)) -> usize {
+        bytes(size, self.buffers.iter().map(|&(scale, _)| scale))
+    }
+
     /// Draws at a new size from here on, into the same textures.
     ///
     /// # Safety
@@ -318,6 +323,15 @@ impl Chain {
 }
 
 /// A picture's size `scale` times smaller each way, at least a pixel.
+/// What a chain takes at `size`: its two targets and a buffer at each of `scales`.
+pub(super) fn bytes(size: (u32, u32), scales: impl Iterator<Item = u32>) -> usize {
+    let pixels = |(width, height): (u32, u32)| 4 * width as usize * height as usize;
+    2 * pixels(size)
+        + scales
+            .map(|scale| pixels(shrunk(size, scale)))
+            .sum::<usize>()
+}
+
 pub(super) fn shrunk(size: (u32, u32), scale: u32) -> (u32, u32) {
     let scale = scale.max(1);
     (size.0.div_ceil(scale).max(1), size.1.div_ceil(scale).max(1))

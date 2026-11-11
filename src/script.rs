@@ -27,7 +27,7 @@ const MODULES: [(&str, &str); 3] = [
 const STRIDE: usize = 15;
 const MEMORY: usize = 64 * 1024 * 1024;
 const STACK: usize = 1024 * 1024;
-/// How long loading the scripts and their first frame may take, and each frame after.
+/// How long loading the scripts may take, and then their first frame; and each frame after.
 const LOADING_MS: u64 = 2000;
 const FRAME_MS: u64 = 50;
 
@@ -373,7 +373,8 @@ impl Stage {
     /// have failed so far. Every call into the world runs against a deadline.
     fn step(&mut self, moment: Moment, report: bool) -> Result<Vec<String>, Error> {
         let spectrum: Option<Vec<f32>> = moment.spectrum.map(|bins| bins.concat());
-        self.allow(FRAME_MS);
+        // The frame that reports is the first, where every script's `init` runs too.
+        self.allow(if report { LOADING_MS } else { FRAME_MS });
         let names = &self.names;
         let (values, effected, written, failures, stopped) = self.context.with(|ctx| {
             let fail = |error| Error::Format(format!("SceneScript: {}", caught(&ctx, error)));

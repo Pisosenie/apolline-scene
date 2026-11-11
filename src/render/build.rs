@@ -126,8 +126,10 @@ impl<'a> Builder<'a> {
         let words = layer.text.as_ref().map(|lettering| super::words::Words {
             lettering: Arc::clone(lettering),
             shown: None,
+            drawn: None,
+            prepared: Arc::clone(&layer.texture),
             texture: inputs[0].texture,
-            bytes: super::words::bytes(&layer.texture, !layer.effects.is_empty()),
+            bytes: super::words::bytes(&layer.texture),
         });
         let sprite = if layer.sprite {
             let key = Arc::as_ptr(&layer.texture);
@@ -399,13 +401,10 @@ impl<'a> Builder<'a> {
                     || program.unproject_picture.is_some()
             });
         let scales: Vec<u32> = buffers.iter().map(|&(_, _, scale)| scale).collect();
-        let pixels = |(width, height): (u32, u32)| 4 * width as usize * height as usize;
-        let bytes = 2 * pixels(size)
-            + scales
-                .iter()
-                .map(|&scale| pixels(super::chain::shrunk(size, scale)))
-                .sum::<usize>();
-        reserve(&mut self.allocated, bytes)?;
+        reserve(
+            &mut self.allocated,
+            super::chain::bytes(size, scales.iter().copied()),
+        )?;
         let chain = unsafe { Chain::new(self.gl, size, steps, passes, &scales, animated)? };
         let (width, height) = (size.0 as f32, size.1 as f32);
         let place = Step {

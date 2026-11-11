@@ -19,26 +19,37 @@ struct Call {
 
 pub(super) fn turned(source: &str) -> Result<String, Error> {
     let mut source = source.to_owned();
+    // Each call is turned once: the search goes on from where the turned call's parts start,
+    // so calls inside them are still found but the call itself isn't found again.
+    let mut from = 0;
     for _ in 0..MOST {
-        let Some(call) = first(&tokens(&source)?) else {
+        let Some(call) = first(&tokens(&source)?, from) else {
             break;
         };
-        let number = &source[call.number.0..call.number.1];
-        let number = if number.contains('.') {
-            number.to_owned()
-        } else {
-            format!("{number}.0")
-        };
-        let rest = source[call.rest..call.close].trim_end().to_owned();
+        let number = fraction(&source[call.number.0..call.number.1]);
+        let rest = fraction(source[call.rest..call.close].trim_end());
         source.replace_range(call.number.0..call.close, &format!("{rest}, {number}"));
+        from = call.number.0;
     }
     Ok(source)
 }
 
-/// The first `max(number, …)` or `min(number, …)`.
-fn first(tokens: &[Token]) -> Option<Call> {
+/// A bare whole number written as a fraction, anything else as it is.
+fn fraction(text: &str) -> String {
+    if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
+        format!("{text}.0")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// The first `max(number, …)` or `min(number, …)` from byte `from` on.
+fn first(tokens: &[Token], from: usize) -> Option<Call> {
     (0..tokens.len()).find_map(|at| {
-        if !matches!(tokens[at].text, "max" | "min") || tokens.get(at + 1)?.text != "(" {
+        if tokens[at].start < from
+            || !matches!(tokens[at].text, "max" | "min")
+            || tokens.get(at + 1)?.text != "("
+        {
             return None;
         }
         // A number is digits and a point written together.
@@ -92,6 +103,14 @@ mod tests {
         assert_eq!(
             turned("x = min(0.5, y[1]) + max(a, 0);").unwrap(),
             "x = min(y[1], 0.5) + max(a, 0);"
+        );
+    }
+
+    #[test]
+    fn two_numbers_are_turned_once_and_later_calls_still_are() {
+        assert_eq!(
+            turned("a = max(0, 1); c = max(0, color.rgb);").unwrap(),
+            "a = max(1.0, 0.0); c = max(color.rgb, 0.0);"
         );
     }
 }

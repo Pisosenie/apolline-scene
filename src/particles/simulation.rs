@@ -134,6 +134,13 @@ impl Default for Tuning {
 impl Simulation {
     /// Starts the system as the scene finds it, already `warmup` seconds in.
     pub fn new(system: Arc<System>, seed: u64) -> Self {
+        let mut simulation = Simulation::cold(system, seed);
+        simulation.restart();
+        simulation
+    }
+
+    /// The system before it starts: `restart` starts it.
+    fn cold(system: Arc<System>, seed: u64) -> Self {
         let silence = [[0.0; 64]; 2];
         let heard = system
             .emitters
@@ -149,7 +156,7 @@ impl Simulation {
             .turbulent
             .and_then(|turbulent| turbulent.hearing)
             .map_or(1.0, |hearing| hearing.share(&silence));
-        let mut simulation = Simulation {
+        Simulation {
             heard,
             stirred,
             owed: vec![0.0; system.emitters.len()],
@@ -166,18 +173,15 @@ impl Simulation {
             serial: 0,
             leader: None,
             following: HashMap::new(),
-        };
-        simulation.restart();
-        simulation
+        }
     }
 
-    /// The same system started afresh, as it would run beside another.
+    /// The same system as it would run beside another, not yet warmed up: following it warms
+    /// it up.
     pub fn twin(&self) -> Simulation {
-        let mut twin = Simulation::new(Arc::clone(&self.system), self.seed);
+        let mut twin = Simulation::cold(Arc::clone(&self.system), self.seed);
         twin.most = self.most;
-        if let Some((leader, tie)) = &self.leader {
-            twin.follow(leader.twin(), *tie);
-        }
+        twin.leader = (self.leader.as_ref()).map(|(leader, tie)| (Box::new(leader.twin()), *tie));
         twin
     }
 
@@ -191,14 +195,17 @@ impl Simulation {
     /// Back to how it stood when the scene started.
     pub fn restart(&mut self) {
         self.reset();
+        for _ in 0..self.warmup_steps() {
+            self.step();
+        }
+    }
+
+    fn warmup_steps(&self) -> u64 {
         // A follower warms up as long as the system it follows does, which it moves with.
         let warmup = (f64::from(self.warmup()) * RATE).round() as u64;
         // Warming up happens before the first frame, in one go: a system that could hold many
         // particles warms up for less time rather than holding the host up.
-        let warmup = warmup.min(WARMUP_WORK / self.room().max(1) as u64);
-        for _ in 0..warmup {
-            self.step();
-        }
+        warmup.min(WARMUP_WORK / self.work().max(1) as u64)
     }
 
     /// Back to the start, before any warming up.
@@ -348,6 +355,11 @@ impl Simulation {
     }
 
     /// How many particles may be alive now.
+    /// The most particles one step can move: its own and every system it follows.
+    fn work(&self) -> usize {
+        self.room() + self.leader.as_ref().map_or(0, |(leader, _)| leader.work())
+    }
+
     fn room(&self) -> usize {
         ((self.system.max as f32 * self.tuning.count) as usize).min(self.most)
     }
@@ -1112,6 +1124,25 @@ mod tests {
             let along = out[0] * particle.velocity[0] + out[1] * (particle.velocity[1] - 100.0);
             assert!(along > 0.0, "a particle flew inward");
         }
+    }
+
+    #[test]
+    fn a_follower_warms_up_within_the_work_its_leader_takes_too() {
+        let crowd = system(
+            r#"{"material": "m.json", "maxcount": 20000, "starttime": 30,
+                "emitter": [{"name": "boxrandom", "rate": 1000, "distancemax": "0 0 0"}],
+                "initializer": [{"name": "lifetimerandom", "min": 60, "max": 60}],
+                "renderer": [{"name": "sprite"}]}"#,
+        );
+        let few = system(
+            r#"{"material": "m.json", "maxcount": 10,
+                "emitter": [{"name": "boxrandom", "rate": 1, "distancemax": "0 0 0"}],
+                "renderer": [{"name": "sprite"}]}"#,
+        );
+        let mut follower = Simulation::cold(few, 4);
+        follower.leader = Some((Box::new(Simulation::cold(crowd, 3)), Tie::Follow));
+        // Thirty seconds are 1800 steps; with its leader's 20,000 particles it takes fewer.
+        assert_eq!(follower.warmup_steps(), WARMUP_WORK / 20_010);
     }
 
     #[test]

@@ -199,6 +199,16 @@ fn lex(source: &str) -> Vec<Tok<'_>> {
                 at += 1;
             }
             Kind::Name
+        } else if c == b'0' && matches!(bytes.get(at + 1), Some(b'x' | b'X')) {
+            // Hex digits include `f`, which mustn't read as a fraction's suffix.
+            at += 2;
+            while at < bytes.len() && bytes[at].is_ascii_hexdigit() {
+                at += 1;
+            }
+            if at < bytes.len() && matches!(bytes[at], b'u' | b'U') {
+                at += 1;
+            }
+            Kind::Number { fraction: false }
         } else if c.is_ascii_digit()
             || (c == b'.' && bytes.get(at + 1).is_some_and(u8::is_ascii_digit))
         {
