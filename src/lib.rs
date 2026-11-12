@@ -23,8 +23,9 @@ pub use script::{Moment, Stage};
 
 use std::fmt;
 
-/// A decoded texture, including all its frames and mipmaps, may use at most 256 MiB.
-pub const MAX_TEXTURE_BYTES: usize = 256 * 1024 * 1024;
+/// A decoded texture, including all its frames and mipmaps, may use at most 1 GiB, the whole of a
+/// scene's decoded budget: a sprite sheet of two 8192² frames takes half of it.
+pub const MAX_TEXTURE_BYTES: usize = 1024 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum Error {

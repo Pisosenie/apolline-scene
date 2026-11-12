@@ -9,7 +9,7 @@ How the host-facing pieces behave in detail. `docs/PLAN.md` has the stages and t
 objects, while rejecting animated texture frames, pointer parallax, 3D and unsupported
 materials. `Renderer::draw_fitted` supports cover and contain; `draw` keeps its cover default.
 Repeated layers share decoded pixels through `Arc<Texture>` and one GPU upload per renderer.
-Hidden layers load no resources. Decoded textures are limited to 256 MiB across frames and
+Hidden layers load no resources. A decoded texture is limited to 1 GiB across frames and
 mipmaps, with dimensions checked before decompression. GPU resources are released when
 construction fails; the host still calls `Renderer::delete` before destroying its GL context.
 
