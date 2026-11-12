@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 2026-11-12
+
+- **Bigger scenes load**: decoded textures may take 1 GiB, a single one too, as much as the GPU budget; the Lain scene's two 8192² frames draw now.
+- **Timelines on particle overrides**: an animation on `instanceoverride` alpha, count, lifetime, rate, size or speed plays, as a script on one already did.
+- Shader fixes for strict drivers: `max(0, 1)`-style calls are turned once and the rest of the shader after them still is, and hex numbers like `0x1F` stay integers.
+- Scripts' first frame gets the 2 s loading time, so heavy `init()`s don't get a scene refused.
+- A child particle system's warm-up counts its leader's particles; a text layer a script retexts counts its effect buffers and keeps its old words if GL won't take the new; puppet skeletons other than MDLS0001–0003 are refused, as documented.
+
 ## 0.1.0 — 2026-11-07
 
 The first release: Wallpaper Engine scenes drawn natively, as a library any GL context can host.
